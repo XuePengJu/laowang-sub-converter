@@ -85,14 +85,14 @@ EOF
 
 remove_conflicting_container() {
   local container_id
-  container_id="$(docker ps -aq --filter "name=^/${APP_NAME}$" | head -n 1 || true)"
+  container_id="$(docker container inspect --format '{{.Id}}' "$APP_NAME" 2>/dev/null || true)"
 
   if [ -z "$container_id" ]; then
     return
   fi
 
   warn "Removing existing container with the same name: ${APP_NAME} (${container_id})"
-  docker rm -f "$container_id" >/dev/null
+  docker rm -f "$APP_NAME" >/dev/null
 }
 
 wait_for_health() {
