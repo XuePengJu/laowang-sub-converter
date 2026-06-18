@@ -107,14 +107,56 @@ export function isPrivateHostname(hostname) {
     }
 
     if (net.isIP(host) === 6) {
-        if (host === '::' || host === '::1') return true
-        if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe8') || host.startsWith('fe9') ||
-            host.startsWith('fea') || host.startsWith('feb') || host.startsWith('ff')) return true
-        const mapped = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-        if (mapped) return isPrivateHostname(mapped[1])
+        const words = expandIpv6(host)
+        if (!words) return true
+
+        if (words.every(word => word === 0) ||
+            (words.slice(0, 7).every(word => word === 0) && words[7] === 1)) {
+            return true
+        }
+
+        const first = words[0]
+        if ((first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80 || (first & 0xff00) === 0xff00) {
+            return true
+        }
+
+        if (words.slice(0, 5).every(word => word === 0) && words[5] === 0xffff) {
+            const mapped = `${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`
+            return isPrivateHostname(mapped)
+        }
     }
 
     return false
+}
+
+function expandIpv6(value) {
+    let host = String(value || '').toLowerCase()
+    const ipv4Match = host.match(/(\d+\.\d+\.\d+\.\d+)$/)
+    if (ipv4Match) {
+        const octets = ipv4Match[1].split('.').map(Number)
+        if (octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) return null
+        host = host.slice(0, -ipv4Match[1].length) +
+            `${((octets[0] << 8) | octets[1]).toString(16)}:${((octets[2] << 8) | octets[3]).toString(16)}`
+    }
+
+    const halves = host.split('::')
+    if (halves.length > 2) return null
+
+    const left = halves[0] ? halves[0].split(':') : []
+    const right = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+    const missing = 8 - left.length - right.length
+    if ((halves.length === 1 && missing !== 0) || (halves.length === 2 && missing < 1)) return null
+
+    const words = [
+        ...left,
+        ...Array(halves.length === 2 ? missing : 0).fill('0'),
+        ...right
+    ].map(part => Number.parseInt(part, 16))
+
+    if (words.length !== 8 || words.some(word => !Number.isInteger(word) || word < 0 || word > 0xffff)) {
+        return null
+    }
+    return words
 }
 
 async function readLimitedText(response, maxBytes) {

@@ -117,6 +117,7 @@
 import { computed, ref } from 'vue'
 import { Activity, Download, HeartPulse, Loader2 } from 'lucide-vue-next'
 import { TARGET_DEFINITIONS } from '../../shared/targets.js'
+import { apiErrorMessage } from '../utils/apiError.js'
 
 const sourceMode = ref('url')
 const sourceInput = ref('')
@@ -167,14 +168,14 @@ const startCheck = async () => {
       body: JSON.stringify(payload)
     })
     const data = await response.json()
-    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+    if (!response.ok || data.error) throw new Error(apiErrorMessage(data, `检测失败（HTTP ${response.status}）`))
 
     results.value = data.nodes || []
     summary.value = data.summary || summary.value
     exportConfig.value = data.exportConfig || ''
     exportFileName.value = data.exportFileName || exportFileName.value
   } catch (err) {
-    error.value = err.message || '健康检测失败'
+    error.value = apiErrorMessage(err, '健康检测失败')
   } finally {
     loading.value = false
   }

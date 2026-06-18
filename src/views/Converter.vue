@@ -84,6 +84,7 @@ import ClientSelector from '../components/ClientSelector.vue'
 import AdvancedOptions from '../components/AdvancedOptions.vue'
 import ResultPanel from '../components/ResultPanel.vue'
 import { getTargetDefinition } from '../../shared/targets.js'
+import { apiErrorMessage } from '../utils/apiError.js'
 
 const subscriptionUrl = ref('')
 const selectedClient = ref('clashmeta')
@@ -142,16 +143,16 @@ const convertSubscription = async () => {
     const response = await fetch(candidateUrl)
     if (!response.ok) {
       const contentType = response.headers.get('content-type') || ''
-      const message = contentType.includes('application/json')
-        ? (await response.json()).message || '转换失败'
+      const detail = contentType.includes('application/json')
+        ? await response.json()
         : await response.text()
-      throw new Error(message || `HTTP ${response.status}`)
+      throw new Error(apiErrorMessage(detail, `转换失败（HTTP ${response.status}）`))
     }
     const output = await response.text()
     if (!output.trim()) throw new Error('目标客户端没有可输出的兼容节点')
     convertedUrl.value = candidateUrl
   } catch (err) {
-    error.value = err.message || '转换失败'
+    error.value = apiErrorMessage(err, '转换失败')
   } finally {
     loading.value = false
   }

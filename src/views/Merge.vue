@@ -128,6 +128,7 @@
 import { computed, reactive, ref } from 'vue'
 import { Download, Eye, GitMerge } from 'lucide-vue-next'
 import { TARGET_DEFINITIONS, getTargetDefinition } from '../../shared/targets.js'
+import { apiErrorMessage } from '../utils/apiError.js'
 
 const urlsContent = ref('')
 const target = ref('clashmeta')
@@ -167,10 +168,10 @@ const previewMerge = async () => {
       body: JSON.stringify({ urls: urls.value, dedupe: options.dedupe })
     })
     const data = await response.json()
-    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+    if (!response.ok || data.error) throw new Error(apiErrorMessage(data, `预览失败（HTTP ${response.status}）`))
     previewResult.value = data
   } catch (err) {
-    error.value = err.message || '预览失败'
+    error.value = apiErrorMessage(err, '预览失败')
   } finally {
     loading.value = false
   }
@@ -192,7 +193,7 @@ const downloadMerge = async () => {
     })
     if (!response.ok) {
       const text = await response.text()
-      throw new Error(text || `HTTP ${response.status}`)
+      throw new Error(apiErrorMessage(text, `合并失败（HTTP ${response.status}）`))
     }
     const blob = await response.blob()
     const objectUrl = URL.createObjectURL(blob)
@@ -202,7 +203,7 @@ const downloadMerge = async () => {
     a.click()
     URL.revokeObjectURL(objectUrl)
   } catch (err) {
-    error.value = err.message || '合并失败'
+    error.value = apiErrorMessage(err, '合并失败')
   } finally {
     loading.value = false
   }
