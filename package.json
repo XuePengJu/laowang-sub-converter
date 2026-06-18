@@ -41,6 +41,8 @@
     "js-yaml": "^4.2.0"
   },
   "devDependencies": {
+    "@emnapi/core": "1.11.1",
+    "@emnapi/runtime": "1.11.1",
     "@vitejs/plugin-vue": "^6.0.7",
     "lucide-vue-next": "^0.468.0",
     "qrcode": "^1.5.3",
