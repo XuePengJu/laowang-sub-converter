@@ -13,6 +13,9 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 
+ARG APP_UID=10001
+ARG APP_GID=10001
+
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV DATA_DIR=/app/data
@@ -23,12 +26,15 @@ RUN npm ci --omit=dev --omit=optional --ignore-scripts --no-audit --no-fund && n
 COPY --from=builder /app/dist ./dist
 COPY server ./server
 
-RUN mkdir -p /app/data && addgroup -S app && adduser -S app -G app && chown -R app:app /app
+RUN addgroup -S -g "${APP_GID}" app \
+    && adduser -S -D -H -u "${APP_UID}" -G app app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
 USER app
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/health || exit 1
+  CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/healthz || exit 1
 
 CMD ["node", "server/index.js"]

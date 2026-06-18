@@ -24,7 +24,7 @@ function safeDecode(value = '') {
 
 function parsePort(value, fallback) {
     const port = Number.parseInt(value, 10)
-    return Number.isInteger(port) && port > 0 ? port : fallback
+    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : fallback
 }
 
 function splitLines(content) {
@@ -45,7 +45,7 @@ export function parseSubscription(content) {
         // Plain subscriptions are expected too.
     }
 
-    const structuredNodes = parseStructuredSubscription(body)
+    const structuredNodes = parseStructuredSubscription(body).filter(isValidNode)
     if (structuredNodes.length) return structuredNodes
 
     const nodes = []
@@ -66,7 +66,7 @@ export function parseSubscription(content) {
 
         if (!parser) continue
         const node = parser(line)
-        if (node && node.server && node.port) nodes.push(node)
+        if (isValidNode(node)) nodes.push(node)
     }
 
     return nodes
@@ -110,7 +110,13 @@ function fromClashProxy(proxy) {
 
     switch (proxy.type) {
         case 'ss':
-            return { ...base, method: proxy.cipher, password: proxy.password, plugin: proxy.plugin, pluginOpts: proxy['plugin-opts'] }
+            return {
+                ...base,
+                method: proxy.cipher,
+                password: proxy.password,
+                plugin: proxy.plugin === 'obfs' ? 'obfs-local' : proxy.plugin,
+                pluginOpts: proxy['plugin-opts']
+            }
         case 'ssr':
             return {
                 ...base,
@@ -158,9 +164,9 @@ function fromClashProxy(proxy) {
         case 'hysteria':
             return {
                 ...base,
-                auth: proxy.auth_str || proxy.auth || '',
-                up: parsePort(proxy.up, 100),
-                down: parsePort(proxy.down, 100),
+                auth: proxy.auth_str || proxy['auth-str'] || proxy.auth || '',
+                up: parsePort(proxy.up || proxy['up-speed'], 100),
+                down: parsePort(proxy.down || proxy['down-speed'], 100),
                 alpn: Array.isArray(proxy.alpn) ? proxy.alpn[0] : (proxy.alpn || 'h3'),
                 obfs: proxy.obfs || '',
                 sni: proxy.sni || proxy.server,
@@ -169,7 +175,7 @@ function fromClashProxy(proxy) {
         case 'hysteria2':
             return {
                 ...base,
-                password: proxy.password || '',
+                password: proxy.password || proxy.auth || '',
                 obfs: proxy.obfs || '',
                 obfsPassword: proxy['obfs-password'] || '',
                 sni: proxy.sni || proxy.server,
@@ -261,7 +267,13 @@ function fromSingBoxOutbound(outbound) {
 
     switch (type) {
         case 'ss':
-            return { ...base, method: outbound.method, password: outbound.password }
+            return {
+                ...base,
+                method: outbound.method,
+                password: outbound.password,
+                plugin: outbound.plugin || '',
+                pluginOpts: outbound.plugin_opts || ''
+            }
         case 'ssr':
             return {
                 ...base,
@@ -388,7 +400,11 @@ function parseSS(uri) {
     try {
         const hashIndex = uri.indexOf('#')
         const name = hashIndex >= 0 ? safeDecode(uri.slice(hashIndex + 1)) : 'SS Node'
-        const raw = hashIndex >= 0 ? uri.slice(5, hashIndex) : uri.slice(5)
+        const rawWithQuery = hashIndex >= 0 ? uri.slice(5, hashIndex) : uri.slice(5)
+        const queryIndex = rawWithQuery.indexOf('?')
+        const raw = (queryIndex >= 0 ? rawWithQuery.slice(0, queryIndex) : rawWithQuery).replace(/\/$/, '')
+        const params = new URLSearchParams(queryIndex >= 0 ? rawWithQuery.slice(queryIndex + 1) : '')
+        const plugin = parsePlugin(params.get('plugin'))
 
         if (raw.includes('@')) {
             const atIndex = raw.lastIndexOf('@')
@@ -405,7 +421,8 @@ function parseSS(uri) {
                     server,
                     port,
                     method: auth.slice(0, split),
-                    password: auth.slice(split + 1)
+                    password: auth.slice(split + 1),
+                    ...plugin
                 }
             }
         }
@@ -426,7 +443,8 @@ function parseSS(uri) {
             server,
             port,
             method: auth.slice(0, split),
-            password: auth.slice(split + 1)
+            password: auth.slice(split + 1),
+            ...plugin
         }
     } catch {
         return null
@@ -516,7 +534,7 @@ function parseTrojan(uri) {
             name: safeDecode(url.hash.slice(1)) || 'Trojan Node',
             server: url.hostname,
             port: parsePort(url.port, 443),
-            password: safeDecode(url.username),
+            password: decodeUserInfo(url),
             sni: params.get('sni') || params.get('peer') || params.get('host') || url.hostname,
             alpn: params.get('alpn') ? params.get('alpn').split(',').filter(Boolean) : [],
             network: params.get('type') || 'tcp',
@@ -539,7 +557,7 @@ function parseHysteria(uri) {
             name: safeDecode(url.hash.slice(1)) || 'Hysteria Node',
             server: url.hostname,
             port: parsePort(url.port, 443),
-            auth: params.get('auth') || safeDecode(url.username) || '',
+            auth: params.get('auth') || decodeUserInfo(url) || '',
             up: parsePort(params.get('upmbps') || params.get('up'), 100),
             down: parsePort(params.get('downmbps') || params.get('down'), 100),
             alpn: params.get('alpn') || 'h3',
@@ -561,7 +579,7 @@ function parseHysteria2(uri) {
             name: safeDecode(url.hash.slice(1)) || 'Hysteria2 Node',
             server: url.hostname,
             port: parsePort(url.port, 443),
-            password: safeDecode(url.username) || params.get('auth') || '',
+            password: decodeUserInfo(url) || params.get('auth') || '',
             obfs: params.get('obfs') || '',
             obfsPassword: params.get('obfs-password') || params.get('obfs_password') || '',
             sni: params.get('sni') || url.hostname,
@@ -581,8 +599,9 @@ function parseTuic(uri) {
             name: safeDecode(url.hash.slice(1)) || 'TUIC Node',
             server: url.hostname,
             port: parsePort(url.port, 443),
-            uuid: url.username,
+            uuid: safeDecode(url.username),
             password: safeDecode(url.password),
+            token: params.get('token') || (!url.password ? safeDecode(url.username) : ''),
             congestion: params.get('congestion_control') || 'bbr',
             alpn: params.get('alpn') ? params.get('alpn').split(',').filter(Boolean) : ['h3'],
             sni: params.get('sni') || url.hostname,
@@ -603,7 +622,7 @@ function parseSnell(uri) {
             name: safeDecode(url.hash.slice(1)) || 'Snell Node',
             server: url.hostname,
             port: parsePort(url.port, 443),
-            psk: safeDecode(url.username) || params.get('psk') || '',
+            psk: decodeUserInfo(url) || params.get('psk') || '',
             version: parsePort(params.get('version') || params.get('v'), 3),
             obfs: params.get('obfs') || '',
             obfsHost: params.get('obfs-host') || params.get('obfs_host') || ''
@@ -622,7 +641,7 @@ function parseAnyTLS(uri) {
             name: safeDecode(url.hash.slice(1)) || 'AnyTLS Node',
             server: url.hostname,
             port: parsePort(url.port, 443),
-            password: safeDecode(url.username) || params.get('password') || '',
+            password: decodeUserInfo(url) || params.get('password') || '',
             sni: params.get('sni') || params.get('peer') || params.get('host') || url.hostname,
             alpn: params.get('alpn') ? params.get('alpn').split(',').filter(Boolean) : [],
             insecure: ['1', 'true'].includes(String(params.get('insecure') || params.get('allow_insecure') || '').toLowerCase()),
@@ -737,4 +756,58 @@ export const base64 = {
     encode: value => Buffer.from(String(value)).toString('base64'),
     decode: decodeBase64,
     encodeUrl: encodeBase64Url
+}
+
+function decodeUserInfo(url) {
+    const username = safeDecode(url.username)
+    const password = safeDecode(url.password)
+    return password ? `${username}:${password}` : username
+}
+
+function parsePlugin(value) {
+    if (!value) return {}
+    const [rawName, ...parts] = String(value).split(';')
+    const plugin = rawName === 'obfs' ? 'obfs-local' : rawName
+    const pluginOpts = Object.fromEntries(parts
+        .map(part => part.split('=', 2))
+        .filter(([key]) => key)
+        .map(([key, item = '']) => [
+            key === 'obfs' ? 'mode' : (key === 'obfs-host' ? 'host' : key),
+            item
+        ]))
+    return {
+        plugin,
+        pluginOpts
+    }
+}
+
+function isValidNode(node) {
+    if (!node || !node.server || !parsePort(node.port)) return false
+
+    switch (node.type) {
+        case 'ss':
+            return Boolean(node.method && node.password)
+        case 'ssr':
+            return Boolean(node.method && node.password && node.protocol && node.obfs)
+        case 'vmess':
+        case 'vless':
+            return Boolean(node.uuid)
+        case 'trojan':
+            return Boolean(node.password)
+        case 'hysteria':
+            return Boolean(node.auth)
+        case 'hysteria2':
+            return Boolean(node.password)
+        case 'tuic':
+            return Boolean(node.token || (node.uuid && node.password))
+        case 'snell':
+            return Boolean(node.psk)
+        case 'anytls':
+            return Boolean(node.password)
+        case 'http':
+        case 'socks5':
+            return true
+        default:
+            return false
+    }
 }

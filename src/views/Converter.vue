@@ -26,7 +26,7 @@
             <p class="section-label">SOURCE</p>
             <h2>订阅来源</h2>
           </div>
-          <span class="mono">{{ selectedApiLabel }}</span>
+          <span class="mono">当前服务 API</span>
         </div>
 
         <label class="field">
@@ -39,26 +39,13 @@
           ></textarea>
         </label>
 
-        <div class="api-grid">
-          <button
-            v-for="api in apiSources"
-            :key="api.id"
-            type="button"
-            class="api-chip"
-            :class="{ active: selectedApi === api.id }"
-            @click="selectedApi = api.id"
-            :title="api.desc"
-          >
-            <Server :size="16" />
-            <span>{{ api.name }}</span>
-          </button>
-        </div>
       </section>
 
       <ClientSelector v-model="selectedClient" />
 
       <AdvancedOptions
         :model-value="advancedOptions"
+        :rule-preset-enabled="supportsRulePreset"
         @update:model-value="updateAdvancedOptions"
       />
 
@@ -66,7 +53,10 @@
         <div>
           <p class="section-label">EXECUTE</p>
           <h2>输出任务</h2>
-          <p>当前目标：<strong>{{ selectedClient }}</strong>，规则模板：<strong>{{ advancedOptions.rulePreset || 'basic' }}</strong></p>
+          <p>
+            当前目标：<strong>{{ selectedClient }}</strong>，规则模板：
+            <strong>{{ supportsRulePreset ? (advancedOptions.rulePreset || 'basic') : '不适用' }}</strong>
+          </p>
         </div>
         <div class="action-buttons">
           <button class="btn btn-primary" type="button" @click="convertSubscription" :disabled="!canConvert || loading">
@@ -89,24 +79,17 @@
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
-import { Loader2, RefreshCw, RotateCcw, Server } from 'lucide-vue-next'
+import { Loader2, RefreshCw, RotateCcw } from 'lucide-vue-next'
 import ClientSelector from '../components/ClientSelector.vue'
 import AdvancedOptions from '../components/AdvancedOptions.vue'
 import ResultPanel from '../components/ResultPanel.vue'
+import { getTargetDefinition } from '../../shared/targets.js'
 
 const subscriptionUrl = ref('')
 const selectedClient = ref('clashmeta')
-const selectedApi = ref('local')
 const loading = ref(false)
 const convertedUrl = ref('')
 const error = ref('')
-
-const apiSources = [
-  { id: 'local', name: '本地服务', desc: '使用当前部署的后端 API', url: '' },
-  { id: 'v1mk', name: 'v1.mk', desc: '第三方转换 API', url: 'https://api.v1.mk' },
-  { id: 'xeton', name: 'xeton.dev', desc: '第三方转换 API', url: 'https://sub.xeton.dev' },
-  { id: 'dler', name: 'dler.io', desc: '第三方转换 API', url: 'https://api.dler.io' }
-]
 
 const advancedOptions = reactive({
   emoji: true,
@@ -119,9 +102,8 @@ const advancedOptions = reactive({
   rulePreset: 'standard'
 })
 
-const currentApi = computed(() => apiSources.find(api => api.id === selectedApi.value) || apiSources[0])
-const selectedApiLabel = computed(() => currentApi.value.name)
 const canConvert = computed(() => subscriptionUrl.value.trim() && selectedClient.value)
+const supportsRulePreset = computed(() => getTargetDefinition(selectedClient.value)?.format === 'yaml')
 
 const steps = computed(() => [
   { id: '01', title: '输入来源', desc: subscriptionUrl.value.trim() ? '已填写订阅地址' : '等待订阅地址', active: Boolean(subscriptionUrl.value.trim()) },
@@ -140,7 +122,6 @@ const convertSubscription = async () => {
   convertedUrl.value = ''
 
   try {
-    const apiBaseUrl = selectedApi.value === 'local' ? window.location.origin : currentApi.value.url
     const params = new URLSearchParams({
       target: selectedClient.value,
       url: subscriptionUrl.value.trim(),
@@ -153,11 +134,22 @@ const convertSubscription = async () => {
     if (advancedOptions.filter) params.append('include', advancedOptions.filter)
     if (advancedOptions.exclude) params.append('exclude', advancedOptions.exclude)
     if (advancedOptions.rename) params.append('rename', advancedOptions.rename)
-    if (advancedOptions.rulePreset) params.append('rulePreset', advancedOptions.rulePreset)
+    if (supportsRulePreset.value && advancedOptions.rulePreset) {
+      params.append('rulePreset', advancedOptions.rulePreset)
+    }
 
-    convertedUrl.value = selectedApi.value === 'local'
-      ? `${apiBaseUrl}/api/convert?${params.toString()}`
-      : `${apiBaseUrl}/sub?${params.toString()}`
+    const candidateUrl = `${window.location.origin}/api/convert?${params.toString()}`
+    const response = await fetch(candidateUrl)
+    if (!response.ok) {
+      const contentType = response.headers.get('content-type') || ''
+      const message = contentType.includes('application/json')
+        ? (await response.json()).message || '转换失败'
+        : await response.text()
+      throw new Error(message || `HTTP ${response.status}`)
+    }
+    const output = await response.text()
+    if (!output.trim()) throw new Error('目标客户端没有可输出的兼容节点')
+    convertedUrl.value = candidateUrl
   } catch (err) {
     error.value = err.message || '转换失败'
   } finally {
@@ -168,7 +160,6 @@ const convertSubscription = async () => {
 const resetForm = () => {
   subscriptionUrl.value = ''
   selectedClient.value = 'clashmeta'
-  selectedApi.value = 'local'
   convertedUrl.value = ''
   error.value = ''
   Object.assign(advancedOptions, {

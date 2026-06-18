@@ -71,6 +71,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import { Check, Copy, Download, Loader2, QrCode } from 'lucide-vue-next'
+import { getTargetDefinition, normalizeTargetId } from '../../shared/targets.js'
 
 const props = defineProps({
   result: {
@@ -92,39 +93,16 @@ const urlInput = ref(null)
 const qrCanvas = ref(null)
 
 const SHARE_LINK_TARGETS = new Set(['shadowrocket', 'v2rayn', 'v2rayng', 'v2rayu'])
-const clientNames = {
-  clash: 'Clash',
-  clashmeta: 'Clash Meta',
-  mihomo: 'Mihomo',
-  stash: 'Stash',
-  clashverge: 'Clash Verge',
-  flclash: 'FlClash',
-  surge: 'Surge',
-  quantumultx: 'Quantumult X',
-  shadowrocket: 'Shadowrocket',
-  loon: 'Loon',
-  v2rayn: 'V2RayN',
-  v2rayng: 'V2RayNG',
-  v2rayu: 'V2RayU',
-  surfboard: 'Surfboard',
-  singbox: 'sing-box',
-  'sing-box': 'sing-box',
-  nekobox: 'NekoBox',
-  hiddify: 'Hiddify',
-  sfa: 'SFA',
-  sfi: 'SFI',
-  sfm: 'SFM'
-}
 
 const target = computed(() => {
   try {
-    return new URL(props.result).searchParams.get('target') || 'config'
+    return normalizeTargetId(new URL(props.result).searchParams.get('target')) || 'config'
   } catch {
     return 'config'
   }
 })
 
-const clientLabel = computed(() => clientNames[target.value] || target.value)
+const clientLabel = computed(() => getTargetDefinition(target.value)?.name || target.value)
 const activeQrItem = computed(() => qrItems.value[activeQrIndex.value])
 
 const copyLink = async () => {
@@ -178,10 +156,7 @@ const downloadConfig = async () => {
 }
 
 const extensionFor = (client) => {
-  if (['singbox', 'sing-box', 'nekobox', 'hiddify', 'sfa', 'sfi', 'sfm'].includes(client)) return 'json'
-  if (['clash', 'clashmeta', 'mihomo', 'stash', 'clashverge', 'clash-verge', 'clashnyanpasu', 'clash-nyanpasu', 'flclash'].includes(client)) return 'yaml'
-  if (['surge', 'loon', 'surfboard'].includes(client)) return 'conf'
-  return 'txt'
+  return getTargetDefinition(client)?.extension || 'txt'
 }
 
 const toggleQR = async () => {

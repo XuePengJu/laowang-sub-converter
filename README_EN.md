@@ -5,7 +5,7 @@ Production-ready private subscription converter with a web console and backend A
 ## Quick Deploy
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash
 ```
 
 Defaults:
@@ -21,13 +21,13 @@ URL: http://SERVER_IP:3000
 Update:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s update
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s update
 ```
 
 Logs:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s logs
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s logs
 ```
 
 ## Features
@@ -37,6 +37,10 @@ curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter
 - Check node TCP reachability from the server and export online nodes.
 - Create persistent short links with click counts.
 - Generate QR codes for subscription URLs and supported share links.
+- Filter every target through a client-specific protocol compatibility matrix.
+- Persist short links with a fixed non-root UID/GID and proxy-aware HTTPS URLs.
+
+Full functionality is supported by the Node/Docker deployment. Incomplete static serverless adapters are intentionally not included.
 
 ## Development
 

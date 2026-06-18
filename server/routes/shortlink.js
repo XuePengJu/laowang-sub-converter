@@ -5,208 +5,206 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const router = express.Router()
-
-// 获取 __dirname
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
+const DATA_FILE = path.join(
+    process.env.DATA_DIR || path.join(__dirname, '../../data'),
+    'shortlinks.json'
+)
 
-// 数据存储路径
-const DATA_FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '../../data'), 'shortlinks.json')
-
-// 确保数据目录存在
-function ensureDataDir() {
-    const dir = path.dirname(DATA_FILE)
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true })
-    }
-    if (!fs.existsSync(DATA_FILE)) {
-        fs.writeFileSync(DATA_FILE, JSON.stringify({ links: {} }))
-    }
-}
-
-// 读取数据
-function readData() {
-    ensureDataDir()
-    try {
-        return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'))
-    } catch (e) {
-        return { links: {} }
-    }
-}
-
-// 写入数据
-function writeData(data) {
-    ensureDataDir()
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2))
-}
-
-// 生成短码
-function generateShortCode(length = 6) {
-    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    let result = ''
-    const randomBytes = crypto.randomBytes(length)
-    for (let i = 0; i < length; i++) {
-        result += chars[randomBytes[i] % chars.length]
-    }
-    return result
-}
-
-// 创建短链接
 router.post('/', (req, res) => {
     try {
-        const { url, code } = req.body
+        const originalUrl = normalizeRedirectUrl(req.body?.url)
+        const requestedCode = String(req.body?.code || '').trim()
 
-        if (!url) {
-            return res.status(400).json({ error: 'URL is required' })
-        }
-
-        // 验证 URL 格式
-        try {
-            new URL(url)
-        } catch (e) {
-            return res.status(400).json({ error: 'Invalid URL format' })
+        if (requestedCode && !/^[a-zA-Z0-9_-]{3,32}$/.test(requestedCode)) {
+            return res.status(400).json({
+                error: 'Custom code must be 3-32 letters, numbers, underscores, or hyphens'
+            })
         }
 
         const data = readData()
-
-        // 检查是否已存在相同 URL
-        for (const [code, link] of Object.entries(data.links)) {
-            if (link.originalUrl === url) {
-                const baseUrl = `${req.protocol}://${req.get('host')}`
-                return res.json({
-                    shortUrl: `${baseUrl}/s/${code}`,
-                    id: code,
-                    originalUrl: url,
-                    created: link.createdAt,
-                    clicks: link.clicks
-                })
+        if (!requestedCode) {
+            const existing = Object.entries(data.links)
+                .find(([, link]) => link.originalUrl === originalUrl)
+            if (existing) {
+                return res.json(publicLink(req, existing[0], existing[1]))
             }
         }
 
-        let shortCode = code ? String(code).trim() : ''
-        if (shortCode && !/^[a-zA-Z0-9_-]{3,32}$/.test(shortCode)) {
-            return res.status(400).json({ error: 'Custom code must be 3-32 letters, numbers, underscores, or hyphens' })
-        }
-        if (shortCode && data.links[shortCode]) {
+        if (requestedCode && data.links[requestedCode]) {
             return res.status(409).json({ error: 'Custom code already exists' })
         }
-        if (!shortCode) {
-            do {
-                shortCode = generateShortCode()
-            } while (data.links[shortCode])
-        }
 
-        // 存储短链接
-        data.links[shortCode] = {
-            originalUrl: url,
+        let code = requestedCode
+        while (!code || data.links[code]) code = generateShortCode()
+
+        data.links[code] = {
+            originalUrl,
             createdAt: new Date().toISOString(),
             clicks: 0
         }
-
         writeData(data)
 
-        const baseUrl = `${req.protocol}://${req.get('host')}`
-        res.json({
-            shortUrl: `${baseUrl}/s/${shortCode}`,
-            id: shortCode,
-            originalUrl: url,
-            created: data.links[shortCode].createdAt,
-            clicks: 0
-        })
-
+        return res.status(201).json(publicLink(req, code, data.links[code]))
     } catch (error) {
-        console.error('Create short link error:', error)
-        res.status(500).json({ error: 'Failed to create short link' })
+        return handleStorageError(res, 'Create short link', error)
     }
 })
 
-// 获取所有短链接
 router.get('/list', (req, res) => {
     try {
-        const data = readData()
-        const baseUrl = `${req.protocol}://${req.get('host')}`
-
-        const links = Object.entries(data.links).map(([code, link]) => ({
-            id: code,
-            shortUrl: `${baseUrl}/s/${code}`,
-            originalUrl: link.originalUrl,
-            clicks: link.clicks,
-            createdAt: link.createdAt
-        }))
-
-        res.json({ links })
+        const links = Object.entries(readData().links)
+            .map(([code, link]) => publicLink(req, code, link))
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        return res.json({ links })
     } catch (error) {
-        console.error('List short links error:', error)
-        res.status(500).json({ error: 'Failed to list short links' })
+        return handleStorageError(res, 'List short links', error)
     }
 })
 
-// 删除短链接
 router.delete('/:code', (req, res) => {
     try {
-        const { code } = req.params
         const data = readData()
-
-        if (!data.links[code]) {
+        if (!data.links[req.params.code]) {
             return res.status(404).json({ error: 'Short link not found' })
         }
 
-        delete data.links[code]
+        delete data.links[req.params.code]
         writeData(data)
-
-        res.json({ success: true })
+        return res.json({ success: true })
     } catch (error) {
-        console.error('Delete short link error:', error)
-        res.status(500).json({ error: 'Failed to delete short link' })
+        return handleStorageError(res, 'Delete short link', error)
     }
 })
 
-// 短链接跳转
-router.get('/:code', (req, res) => {
-    try {
-        const { code } = req.params
-        const data = readData()
-
-        const link = data.links[code]
-        if (!link) {
-            return res.status(404).json({ error: 'Short link not found' })
-        }
-
-        // 更新点击次数
-        link.clicks++
-        writeData(data)
-
-        // 重定向到原始 URL
-        res.redirect(302, link.originalUrl)
-    } catch (error) {
-        console.error('Redirect error:', error)
-        res.status(500).json({ error: 'Redirect failed' })
-    }
-})
-
-// 获取短链接统计
 router.get('/:code/stats', (req, res) => {
     try {
-        const { code } = req.params
-        const data = readData()
-
-        const link = data.links[code]
-        if (!link) {
-            return res.status(404).json({ error: 'Short link not found' })
-        }
-
-        const baseUrl = `${req.protocol}://${req.get('host')}`
-        res.json({
-            id: code,
-            shortUrl: `${baseUrl}/s/${code}`,
-            originalUrl: link.originalUrl,
-            clicks: link.clicks,
-            createdAt: link.createdAt
-        })
+        const link = readData().links[req.params.code]
+        if (!link) return res.status(404).json({ error: 'Short link not found' })
+        return res.json(publicLink(req, req.params.code, link))
     } catch (error) {
-        console.error('Get stats error:', error)
-        res.status(500).json({ error: 'Failed to get stats' })
+        return handleStorageError(res, 'Get short link stats', error)
     }
 })
+
+router.get('/:code', (req, res) => {
+    try {
+        const data = readData()
+        const link = data.links[req.params.code]
+        if (!link) return res.status(404).json({ error: 'Short link not found' })
+
+        link.clicks += 1
+        try {
+            writeData(data)
+        } catch (error) {
+            console.warn('Update short link click count failed:', error.message)
+        }
+        return res.redirect(302, link.originalUrl)
+    } catch (error) {
+        return handleStorageError(res, 'Redirect short link', error)
+    }
+})
+
+function readData() {
+    if (!fs.existsSync(DATA_FILE)) return emptyData()
+
+    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || !parsed.links || typeof parsed.links !== 'object') {
+        throw new Error('Short link data file has an invalid structure')
+    }
+
+    return {
+        version: 1,
+        links: Object.fromEntries(Object.entries(parsed.links)
+            .filter(([, link]) => link && typeof link.originalUrl === 'string')
+            .map(([code, link]) => [code, {
+                originalUrl: link.originalUrl,
+                createdAt: link.createdAt || new Date(0).toISOString(),
+                clicks: Number.isFinite(Number(link.clicks)) ? Number(link.clicks) : 0
+            }]))
+    }
+}
+
+function writeData(data) {
+    const directory = path.dirname(DATA_FILE)
+    fs.mkdirSync(directory, { recursive: true })
+
+    const temporaryFile = path.join(
+        directory,
+        `.${path.basename(DATA_FILE)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`
+    )
+    try {
+        fs.writeFileSync(temporaryFile, JSON.stringify(data, null, 2), {
+            encoding: 'utf8',
+            mode: 0o600
+        })
+        fs.renameSync(temporaryFile, DATA_FILE)
+    } finally {
+        if (fs.existsSync(temporaryFile)) fs.rmSync(temporaryFile, { force: true })
+    }
+}
+
+function emptyData() {
+    return { version: 1, links: {} }
+}
+
+function generateShortCode(length = 7) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+    const bytes = crypto.randomBytes(length)
+    return Array.from(bytes, byte => chars[byte % chars.length]).join('')
+}
+
+function normalizeRedirectUrl(value) {
+    let url
+    try {
+        url = new URL(String(value || '').trim())
+    } catch {
+        const error = new Error('Invalid URL format')
+        error.status = 400
+        throw error
+    }
+    if (!['http:', 'https:'].includes(url.protocol)) {
+        const error = new Error('Short links only support http or https URLs')
+        error.status = 400
+        throw error
+    }
+    return url.toString()
+}
+
+function publicLink(req, code, link) {
+    return {
+        id: code,
+        shortUrl: `${publicBaseUrl(req)}/s/${code}`,
+        originalUrl: link.originalUrl,
+        clicks: link.clicks || 0,
+        createdAt: link.createdAt,
+        created: link.createdAt
+    }
+}
+
+function publicBaseUrl(req) {
+    const configured = String(process.env.PUBLIC_BASE_URL || '').trim()
+    if (configured) {
+        try {
+            const url = new URL(configured)
+            if (['http:', 'https:'].includes(url.protocol)) {
+                return url.toString().replace(/\/+$/, '')
+            }
+        } catch {
+            console.warn('Ignoring invalid PUBLIC_BASE_URL')
+        }
+    }
+    return `${req.protocol}://${req.get('host')}`
+}
+
+function handleStorageError(res, action, error) {
+    if (error.status) return res.status(error.status).json({ error: error.message })
+    console.error(`${action} error:`, error)
+    return res.status(500).json({
+        error: 'Short link storage is unavailable',
+        message: `Check that DATA_DIR is writable: ${path.dirname(DATA_FILE)}`
+    })
+}
 
 export default router

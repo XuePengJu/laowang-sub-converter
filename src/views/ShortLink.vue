@@ -101,7 +101,7 @@ const createShortLink = async () => {
       body: JSON.stringify({ url: newUrl.value.trim(), code: customCode.value.trim() || undefined })
     })
     const data = await response.json()
-    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+    if (!response.ok || data.error) throw new Error(data.message || data.error || `HTTP ${response.status}`)
     shortLinks.value = [normalizeLink(data), ...shortLinks.value.filter(link => link.id !== data.id)]
     newUrl.value = ''
     customCode.value = ''
@@ -118,7 +118,7 @@ const loadShortLinks = async () => {
   try {
     const response = await fetch('/api/shortlink/list')
     const data = await response.json()
-    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+    if (!response.ok || data.error) throw new Error(data.message || data.error || `HTTP ${response.status}`)
     shortLinks.value = (data.links || []).map(normalizeLink)
   } catch (err) {
     error.value = err.message || '加载失败'
@@ -136,7 +136,7 @@ const deleteLink = async (id) => {
   try {
     const response = await fetch(`/api/shortlink/${id}`, { method: 'DELETE' })
     const data = await response.json()
-    if (!response.ok || data.error) throw new Error(data.error || `HTTP ${response.status}`)
+    if (!response.ok || data.error) throw new Error(data.message || data.error || `HTTP ${response.status}`)
     shortLinks.value = shortLinks.value.filter(link => link.id !== id)
     success.value = '短链接已删除。'
   } catch (err) {

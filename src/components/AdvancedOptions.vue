@@ -21,8 +21,8 @@
         </div>
 
         <label class="field">
-          <span>分流规则模板</span>
-          <select class="select" v-model="options.rulePreset">
+          <span>分流规则模板{{ rulePresetEnabled ? '' : '（仅 YAML 客户端）' }}</span>
+          <select class="select" v-model="options.rulePreset" :disabled="!rulePresetEnabled">
             <option value="">基础兼容规则</option>
             <option value="standard">标准日常分流</option>
             <option value="developer">开发工具分流</option>
@@ -60,6 +60,10 @@ const props = defineProps({
   modelValue: {
     type: Object,
     default: () => ({})
+  },
+  rulePresetEnabled: {
+    type: Boolean,
+    default: true
   }
 })
 

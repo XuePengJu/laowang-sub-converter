@@ -18,12 +18,18 @@ export function applyNodeOptions(nodes, options = {}) {
 
     const includeKeywords = splitKeywords(options.include)
     if (includeKeywords.length) {
-        output = output.filter(node => includeKeywords.some(keyword => node.name.includes(keyword)))
+        output = output.filter(node => {
+            const name = String(node.name || '').toLocaleLowerCase()
+            return includeKeywords.some(keyword => name.includes(keyword.toLocaleLowerCase()))
+        })
     }
 
     const excludeKeywords = splitKeywords(options.exclude)
     if (excludeKeywords.length) {
-        output = output.filter(node => !excludeKeywords.some(keyword => node.name.includes(keyword)))
+        output = output.filter(node => {
+            const name = String(node.name || '').toLocaleLowerCase()
+            return !excludeKeywords.some(keyword => name.includes(keyword.toLocaleLowerCase()))
+        })
     }
 
     if (boolOption(options.sort, false)) {
@@ -44,7 +50,9 @@ export function applyNodeOptions(nodes, options = {}) {
 export function dedupeNodes(nodes) {
     const seen = new Set()
     return nodes.filter(node => {
-        const key = `${node.type}:${node.server}:${node.port}`
+        const key = stableStringify(
+            Object.fromEntries(Object.entries(node).filter(([key]) => key !== 'name'))
+        )
         if (seen.has(key)) return false
         seen.add(key)
         return true
@@ -67,4 +75,13 @@ export function renameNodes(nodes, renameRules) {
         }
         return { ...node, name }
     })
+}
+
+function stableStringify(value) {
+    if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+    if (!value || typeof value !== 'object') return JSON.stringify(value)
+    return `{${Object.keys(value)
+        .sort()
+        .map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+        .join(',')}}`
 }

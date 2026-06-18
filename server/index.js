@@ -9,7 +9,7 @@ import shortlinkRouter from './routes/shortlink.js'
 import healthRouter from './routes/health.js'
 import mergeRouter from './routes/merge.js'
 import { getRulePresets } from './utils/rules.js'
-import { contentTypeForTarget, extensionForTarget, supportedTargets } from './utils/targets.js'
+import { targetDefinitions } from './utils/targets.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -19,10 +19,12 @@ const PORT = process.env.PORT || 3000
 const distDir = path.join(__dirname, '../dist')
 const hasBuiltFrontend = fs.existsSync(path.join(distDir, 'index.html'))
 const shouldServeFrontend = process.env.NODE_ENV === 'production' || hasBuiltFrontend
+const trustProxy = process.env.TRUST_PROXY || '1'
 
+app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy)
 app.use(cors())
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+app.use(express.json({ limit: '1mb' }))
+app.use(express.urlencoded({ extended: true, limit: '1mb' }))
 
 app.use('/api/convert', convertRouter)
 app.use('/api/shortlink', shortlinkRouter)
@@ -35,11 +37,7 @@ app.get('/api/rules/presets', (req, res) => {
 })
 
 app.get('/api/targets', (req, res) => {
-    res.json(supportedTargets().map(id => ({
-        id,
-        contentType: contentTypeForTarget(id),
-        extension: extensionForTarget(id)
-    })))
+    res.json(targetDefinitions())
 })
 
 const serverHealth = (req, res) => {
@@ -52,6 +50,10 @@ app.get('/health', (req, res, next) => {
         return next()
     }
     return serverHealth(req, res)
+})
+
+app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'API route not found' })
 })
 
 if (shouldServeFrontend) {

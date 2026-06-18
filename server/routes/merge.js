@@ -27,6 +27,13 @@ router.post('/', async (req, res) => {
         if (!urls || !Array.isArray(urls) || urls.length === 0) {
             return res.status(400).json({ error: 'urls array is required' })
         }
+        if (urls.length > 20 || urls.some(url => typeof url !== 'string')) {
+            return res.status(400).json({ error: 'A maximum of 20 subscription URLs is allowed' })
+        }
+        const normalizedUrls = urls.map(url => url.trim()).filter(Boolean)
+        if (!normalizedUrls.length) {
+            return res.status(400).json({ error: 'At least one subscription URL is required' })
+        }
 
         const target = normalizeTarget(rawTarget)
         if (!target || !isSupportedTarget(target)) {
@@ -37,7 +44,7 @@ router.post('/', async (req, res) => {
         }
 
         // 并发获取所有订阅
-        const fetchPromises = urls.map(async (url, index) => {
+        const fetchPromises = normalizedUrls.map(async (url, index) => {
             try {
                 const content = await fetchSubscriptionContent(url, { timeoutMs: 10000 })
                 const nodes = parseSubscription(content)
@@ -66,7 +73,7 @@ router.post('/', async (req, res) => {
             }
         }
 
-        // 去重 (基于 type:server:port 组合，防止同端口不同协议误删)
+        // Only remove exact duplicate connection definitions.
         if (boolOption(dedupe, true)) allNodes = dedupeNodes(allNodes)
 
         allNodes = applyNodeOptions(allNodes, { include, exclude, sort, emoji, rename })
@@ -93,7 +100,7 @@ router.post('/', async (req, res) => {
             return res.json({
                 success: true,
                 summary: {
-                    totalSubscriptions: urls.length,
+                    totalSubscriptions: normalizedUrls.length,
                     successfulFetches: results.filter(r => r.success).length,
                     failedFetches: results.filter(r => !r.success).length,
                     totalNodes: allNodes.length,
@@ -120,9 +127,16 @@ router.post('/preview', async (req, res) => {
         if (!urls || !Array.isArray(urls) || urls.length === 0) {
             return res.status(400).json({ error: 'urls array is required' })
         }
+        if (urls.length > 20 || urls.some(url => typeof url !== 'string')) {
+            return res.status(400).json({ error: 'A maximum of 20 subscription URLs is allowed' })
+        }
+        const normalizedUrls = urls.map(url => url.trim()).filter(Boolean)
+        if (!normalizedUrls.length) {
+            return res.status(400).json({ error: 'At least one subscription URL is required' })
+        }
 
         // 并发获取所有订阅
-        const fetchPromises = urls.map(async (url) => {
+        const fetchPromises = normalizedUrls.map(async (url) => {
             try {
                 const content = await fetchSubscriptionContent(url, { timeoutMs: 10000 })
                 return { success: true, nodes: parseSubscription(content) }

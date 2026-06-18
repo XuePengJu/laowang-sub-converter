@@ -166,7 +166,11 @@ export function getRulePreset(presetId) {
 }
 
 export function applyRulePreset(nodeNames, presetId = 'basic') {
-    const names = Array.isArray(nodeNames) ? nodeNames : nodeNames.map(node => node.name)
+    const names = Array.isArray(nodeNames)
+        ? nodeNames
+            .map(item => typeof item === 'string' ? item : item?.name)
+            .filter(Boolean)
+        : []
     const preset = getRulePreset(presetId)
     const groups = preset.groups.map(group => {
         const proxies = group.type === 'url-test'

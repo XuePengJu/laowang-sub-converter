@@ -29,6 +29,7 @@
 
 <script setup>
 import { Box, Flame, Gem, Monitor, Radio, Rocket, Shield, Smartphone, Sparkles, Waves, Zap } from 'lucide-vue-next'
+import { TARGET_DEFINITIONS } from '../../shared/targets.js'
 
 defineProps({
   modelValue: {
@@ -39,28 +40,24 @@ defineProps({
 
 defineEmits(['update:modelValue'])
 
-const clients = [
-  { id: 'clashmeta', name: 'Clash Meta', platform: 'Meta YAML / 推荐', icon: Sparkles },
-  { id: 'mihomo', name: 'Mihomo', platform: 'Meta 内核 YAML', icon: Sparkles },
-  { id: 'stash', name: 'Stash', platform: 'iOS / macOS YAML', icon: Box },
-  { id: 'singbox', name: 'sing-box', platform: '通用 JSON 配置', icon: Radio },
-  { id: 'hiddify', name: 'Hiddify', platform: 'sing-box JSON', icon: Shield },
-  { id: 'clash', name: 'Clash', platform: '经典 YAML', icon: Flame },
-  { id: 'clashverge', name: 'Clash Verge', platform: '桌面客户端', icon: Monitor },
-  { id: 'flclash', name: 'FlClash', platform: 'Flutter 客户端', icon: Monitor },
-  { id: 'surge', name: 'Surge', platform: 'iOS / macOS CONF', icon: Waves },
-  { id: 'quantumultx', name: 'Quantumult X', platform: 'iOS 配置片段', icon: Gem },
-  { id: 'shadowrocket', name: 'Shadowrocket', platform: '分享链接', icon: Rocket },
-  { id: 'loon', name: 'Loon', platform: 'iOS CONF', icon: Zap },
-  { id: 'v2rayn', name: 'V2RayN', platform: 'Windows 分享链接', icon: Monitor },
-  { id: 'v2rayng', name: 'V2RayNG', platform: 'Android 分享链接', icon: Smartphone },
-  { id: 'v2rayu', name: 'V2RayU', platform: 'macOS 分享链接', icon: Monitor },
-  { id: 'nekobox', name: 'NekoBox', platform: 'Android JSON', icon: Box },
-  { id: 'surfboard', name: 'Surfboard', platform: 'Android CONF', icon: Waves },
-  { id: 'sfa', name: 'SFA', platform: 'Android sing-box', icon: Smartphone },
-  { id: 'sfi', name: 'SFI', platform: 'iOS sing-box', icon: Smartphone },
-  { id: 'sfm', name: 'SFM', platform: 'macOS sing-box', icon: Monitor }
-]
+const clients = TARGET_DEFINITIONS.map(client => ({
+  ...client,
+  icon: iconFor(client.id)
+}))
+
+function iconFor(id) {
+  if (['clashmeta', 'mihomo'].includes(id)) return Sparkles
+  if (id === 'clash') return Flame
+  if (['stash', 'nekobox'].includes(id)) return Box
+  if (id === 'singbox') return Radio
+  if (id === 'hiddify') return Shield
+  if (['surge', 'surfboard'].includes(id)) return Waves
+  if (id === 'quantumultx') return Gem
+  if (id === 'shadowrocket') return Rocket
+  if (id === 'loon') return Zap
+  if (['v2rayng', 'sfa', 'sfi'].includes(id)) return Smartphone
+  return Monitor
+}
 </script>
 
 <style scoped>

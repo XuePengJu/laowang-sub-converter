@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
             return res.status(400).json({ error: 'Subscription URL is required' })
         }
 
-        const rawContent = await fetchSubscriptionContent(decodeURIComponent(url))
+        const rawContent = await fetchSubscriptionContent(url)
         const nodes = applyNodeOptions(parseSubscription(rawContent), {
             include,
             exclude,

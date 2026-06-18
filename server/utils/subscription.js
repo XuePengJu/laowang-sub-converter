@@ -1,83 +1,166 @@
+import dns from 'node:dns/promises'
+import net from 'node:net'
+
 const USER_AGENT = 'LaoWang-Sub-Converter/1.0'
+const DEFAULT_TIMEOUT_MS = 15000
+const DEFAULT_MAX_BYTES = 5 * 1024 * 1024
+const MAX_REDIRECTS = 5
 
 export function normalizeSubscriptionUrl(value) {
     let url
     try {
         url = new URL(String(value || '').trim())
     } catch {
-        throw badRequest('Invalid subscription URL')
+        throw httpError(400, 'Invalid subscription URL')
     }
 
     if (!['http:', 'https:'].includes(url.protocol)) {
-        throw badRequest('Subscription URL must use http or https')
+        throw httpError(400, 'Subscription URL must use http or https')
     }
-
-    if (!allowPrivateSubscriptionUrls() && isPrivateHost(url.hostname)) {
-        throw badRequest('Private or local subscription URLs are disabled')
+    if (url.username || url.password) {
+        throw httpError(400, 'Subscription URL credentials are not supported')
     }
-
-    return url.toString()
+    return url
 }
 
-export async function fetchSubscriptionContent(url, options = {}) {
-    const subscriptionUrl = normalizeSubscriptionUrl(url)
-    const timeoutMs = Number(options.timeoutMs) || 15000
-    const signal = AbortSignal.timeout(timeoutMs)
+export async function fetchSubscriptionContent(value, options = {}) {
+    const timeoutMs = clampNumber(options.timeoutMs, DEFAULT_TIMEOUT_MS, 1000, 60000)
+    const maxBytes = clampNumber(options.maxBytes, DEFAULT_MAX_BYTES, 1024, 20 * 1024 * 1024)
+    let currentUrl = normalizeSubscriptionUrl(value)
 
-    const response = await fetch(subscriptionUrl, {
-        headers: {
-            'User-Agent': USER_AGENT,
-            ...(options.headers || {})
-        },
-        signal
-    })
+    for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
+        await assertHostAllowed(currentUrl.hostname)
 
-    if (!response.ok) {
-        const error = new Error(`Failed to fetch subscription: HTTP ${response.status}`)
-        error.status = 502
-        throw error
+        const response = await fetch(currentUrl, {
+            headers: {
+                'User-Agent': USER_AGENT,
+                Accept: 'text/plain, application/yaml, application/json, */*',
+                ...(options.headers || {})
+            },
+            signal: AbortSignal.timeout(timeoutMs),
+            redirect: 'manual'
+        })
+
+        if (isRedirect(response.status)) {
+            const location = response.headers.get('location')
+            if (!location) throw httpError(502, 'Subscription redirect is missing a location')
+            if (redirectCount === MAX_REDIRECTS) throw httpError(502, 'Too many subscription redirects')
+            currentUrl = normalizeSubscriptionUrl(new URL(location, currentUrl).toString())
+            continue
+        }
+
+        if (!response.ok) {
+            throw httpError(502, `Failed to fetch subscription: HTTP ${response.status}`)
+        }
+
+        const contentLength = Number(response.headers.get('content-length'))
+        if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+            throw httpError(413, `Subscription is larger than ${maxBytes} bytes`)
+        }
+
+        return readLimitedText(response, maxBytes)
     }
 
-    return response.text()
+    throw httpError(502, 'Failed to fetch subscription')
 }
 
-function allowPrivateSubscriptionUrls() {
-    return ['1', 'true', 'yes'].includes(String(process.env.ALLOW_PRIVATE_SUBSCRIPTION_URLS || '').toLowerCase())
+export async function assertHostAllowed(hostname) {
+    if (allowPrivateSubscriptionUrls()) return
+
+    const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase()
+    if (isPrivateHostname(host)) {
+        throw httpError(400, 'Private or local addresses are disabled')
+    }
+
+    if (!net.isIP(host)) {
+        let addresses
+        try {
+            addresses = await dns.lookup(host, { all: true, verbatim: true })
+        } catch {
+            throw httpError(502, 'Subscription hostname could not be resolved')
+        }
+        if (!addresses.length || addresses.some(item => isPrivateHostname(item.address))) {
+            throw httpError(400, 'Subscription hostname resolves to a private or local address')
+        }
+    }
 }
 
-function isPrivateHost(hostname) {
-    const host = String(hostname || '').toLowerCase()
+export function isPrivateHostname(hostname) {
+    const host = String(hostname || '').replace(/^\[|\]$/g, '').toLowerCase()
     if (!host) return true
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true
 
-    const ipv4 = parseIPv4(host)
-    if (ipv4) {
-        const [a, b] = ipv4
+    if (net.isIP(host) === 4) {
+        const [a, b, c] = host.split('.').map(Number)
         return a === 0 ||
             a === 10 ||
+            (a === 100 && b >= 64 && b <= 127) ||
             a === 127 ||
             (a === 169 && b === 254) ||
             (a === 172 && b >= 16 && b <= 31) ||
-            (a === 192 && b === 168)
+            (a === 192 && b === 168) ||
+            (a === 192 && b === 0 && [0, 2].includes(c)) ||
+            (a === 198 && [18, 19].includes(b)) ||
+            (a === 198 && b === 51 && c === 100) ||
+            (a === 203 && b === 0 && c === 113) ||
+            a >= 224
     }
 
-    const ipv6 = host.replace(/^\[/, '').replace(/\]$/, '')
-    return ipv6 === '::1' ||
-        ipv6.startsWith('fc') ||
-        ipv6.startsWith('fd') ||
-        ipv6.startsWith('fe80:')
+    if (net.isIP(host) === 6) {
+        if (host === '::' || host === '::1') return true
+        if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe8') || host.startsWith('fe9') ||
+            host.startsWith('fea') || host.startsWith('feb') || host.startsWith('ff')) return true
+        const mapped = host.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+        if (mapped) return isPrivateHostname(mapped[1])
+    }
+
+    return false
 }
 
-function parseIPv4(host) {
-    const parts = host.split('.')
-    if (parts.length !== 4) return null
-    const numbers = parts.map(part => Number.parseInt(part, 10))
-    if (numbers.some((part, index) => String(part) !== parts[index] || part < 0 || part > 255)) return null
-    return numbers
+async function readLimitedText(response, maxBytes) {
+    if (!response.body) return ''
+    const reader = response.body.getReader()
+    const chunks = []
+    let total = 0
+
+    while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        total += value.byteLength
+        if (total > maxBytes) {
+            await reader.cancel()
+            throw httpError(413, `Subscription is larger than ${maxBytes} bytes`)
+        }
+        chunks.push(value)
+    }
+
+    const output = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) {
+        output.set(chunk, offset)
+        offset += chunk.byteLength
+    }
+    return new TextDecoder().decode(output)
 }
 
-function badRequest(message) {
+function allowPrivateSubscriptionUrls() {
+    return ['1', 'true', 'yes'].includes(
+        String(process.env.ALLOW_PRIVATE_SUBSCRIPTION_URLS || '').toLowerCase()
+    )
+}
+
+function isRedirect(status) {
+    return [301, 302, 303, 307, 308].includes(status)
+}
+
+function clampNumber(value, fallback, min, max) {
+    const number = Number(value)
+    if (!Number.isFinite(number)) return fallback
+    return Math.min(Math.max(Math.round(number), min), max)
+}
+
+function httpError(status, message) {
     const error = new Error(message)
-    error.status = 400
+    error.status = status
     return error
 }

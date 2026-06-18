@@ -7,6 +7,9 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/${APP_NAME}}"
 PORT="${PORT:-3000}"
 DATA_DIR="${DATA_DIR:-${INSTALL_DIR}/data}"
 ALLOW_PRIVATE_SUBSCRIPTION_URLS="${ALLOW_PRIVATE_SUBSCRIPTION_URLS:-0}"
+PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"
+APP_UID="${APP_UID:-10001}"
+APP_GID="${APP_GID:-10001}"
 ACTION="${1:-install}"
 
 log() {
@@ -64,6 +67,9 @@ compose_cmd() {
 write_compose() {
   need_root
   mkdir -p "$INSTALL_DIR" "$DATA_DIR"
+  chown -R "${APP_UID}:${APP_GID}" "$DATA_DIR" ||
+    fail "Cannot set data directory ownership to ${APP_UID}:${APP_GID}: ${DATA_DIR}"
+  chmod 750 "$DATA_DIR"
 
   cat >"${INSTALL_DIR}/docker-compose.yml" <<EOF
 services:
@@ -75,11 +81,17 @@ services:
       PORT: 3000
       DATA_DIR: /app/data
       ALLOW_PRIVATE_SUBSCRIPTION_URLS: "${ALLOW_PRIVATE_SUBSCRIPTION_URLS}"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL}"
     ports:
       - "${PORT}:3000"
     volumes:
       - "${DATA_DIR}:/app/data"
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
 EOF
 }
 
@@ -192,6 +204,9 @@ Environment variables:
   DATA_DIR=/opt/laowang-sub-converter/data
   IMAGE=ghcr.io/tony-wang1990/laowang-sub-converter:latest
   ALLOW_PRIVATE_SUBSCRIPTION_URLS=0
+  PUBLIC_BASE_URL=https://sub.example.com
+  APP_UID=10001
+  APP_GID=10001
 EOF
     exit 1
     ;;

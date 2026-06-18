@@ -116,6 +116,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { Activity, Download, HeartPulse, Loader2 } from 'lucide-vue-next'
+import { TARGET_DEFINITIONS } from '../../shared/targets.js'
 
 const sourceMode = ref('url')
 const sourceInput = ref('')
@@ -130,24 +131,10 @@ const exportConfig = ref('')
 const exportFileName = ref('online-nodes.txt')
 const currentFilter = ref('all')
 
-const exportTargets = [
-  { id: 'v2rayn', name: 'V2RayN / 分享链接' },
-  { id: 'v2rayng', name: 'V2RayNG / 分享链接' },
-  { id: 'shadowrocket', name: 'Shadowrocket 分享链接' },
-  { id: 'clash', name: 'Clash YAML' },
-  { id: 'clashmeta', name: 'Clash Meta YAML' },
-  { id: 'mihomo', name: 'Mihomo YAML' },
-  { id: 'stash', name: 'Stash YAML' },
-  { id: 'singbox', name: 'sing-box JSON' },
-  { id: 'hiddify', name: 'Hiddify JSON' },
-  { id: 'nekobox', name: 'NekoBox JSON' },
-  { id: 'sfa', name: 'SFA JSON' },
-  { id: 'sfi', name: 'SFI JSON' },
-  { id: 'sfm', name: 'SFM JSON' },
-  { id: 'surge', name: 'Surge CONF' },
-  { id: 'loon', name: 'Loon CONF' },
-  { id: 'surfboard', name: 'Surfboard CONF' }
-]
+const exportTargets = TARGET_DEFINITIONS.map(client => ({
+  id: client.id,
+  name: `${client.name} / ${client.extension.toUpperCase()}`
+}))
 
 const filters = [
   { id: 'all', label: '全部' },

@@ -28,14 +28,16 @@ Surge, Surfboard, Loon, Quantumult X, Shadowrocket,
 V2RayN, V2RayNG, V2RayU, NekoBox, Hiddify, sing-box, SFA, SFI, SFM
 ```
 
-注意：不同客户端原生支持的协议不同。转换器会尽量只输出目标客户端可识别的节点；如果没有可输出节点，接口会返回 `422`。
+转换器使用统一兼容矩阵，只输出目标客户端可识别的协议。Mihomo、Stash、Surge、Surfboard 和 sing-box 使用各自字段格式；分享链接目标也会过滤不支持的协议。如果没有兼容节点，接口返回 `422`。
+
+完整功能以 Node/Docker 部署为准。仓库不再提供只有部分 API 可用的静态 Serverless 部署配置。
 
 ## 服务器一键部署
 
 推荐在 Ubuntu、Debian、CentOS 等 Linux 服务器上执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash
 ```
 
 默认参数：
@@ -51,42 +53,53 @@ curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter
 指定端口：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo env PORT=8080 bash
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo env PORT=8080 bash
 ```
 
 更新到最新镜像：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s update
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s update
 ```
 
 查看状态：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s status
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s status
 ```
 
 查看日志：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s logs
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s logs
 ```
 
 卸载容器，保留数据目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s uninstall
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s uninstall
 ```
 
 如果需要允许服务端拉取本机或内网订阅地址：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo env ALLOW_PRIVATE_SUBSCRIPTION_URLS=1 bash
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo env ALLOW_PRIVATE_SUBSCRIPTION_URLS=1 bash
 ```
+
+使用 HTTPS 域名反向代理时，可固定短链接公网地址：
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" |
+  sudo env PUBLIC_BASE_URL=https://sub.example.com bash
+```
+
+脚本会把数据目录修正为容器 UID/GID `10001:10001`，自动修复旧版本因 root 所有权导致的 `Failed to list short links`。
 
 ## 手动 Docker 部署
 
 ```bash
+sudo install -d -m 750 -o 10001 -g 10001 /opt/laowang-sub-converter/data
+
 docker run -d \
   --name laowang-sub-converter \
   -p 3000:3000 \
@@ -110,8 +123,16 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data
+      - laowang-data:/app/data
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  laowang-data:
 ```
 
 ## 环境变量
@@ -121,6 +142,8 @@ services:
 | `PORT` | `3000` | 服务监听端口 |
 | `DATA_DIR` | `./data` 或 `/app/data` | 短链接数据目录 |
 | `ALLOW_PRIVATE_SUBSCRIPTION_URLS` | `0` | 是否允许后端拉取 localhost、内网 IP、`.local` 等私有订阅地址 |
+| `PUBLIC_BASE_URL` | 空 | 反向代理后的公网地址，例如 `https://sub.example.com` |
+| `TRUST_PROXY` | `1` | Express 信任的反向代理跳数或规则 |
 
 默认禁止私有地址是为了降低公开部署时的 SSRF 风险。仅在自用内网部署并明确需要时开启。
 
@@ -243,7 +266,7 @@ npm run build
 npm run audit
 ```
 
-当前测试覆盖协议解析、目标客户端关键字段、订阅转换、合并、去重、健康检测和在线节点导出。
+当前测试覆盖 21 个目标客户端兼容矩阵、协议解析、订阅转换、合并、去重、健康检测、短链接完整生命周期、HTTPS 反代地址、部署权限和未知 API 路由。发布前还使用官方 Mihomo 与 sing-box 内核检查生成配置。
 
 ## 镜像发布
 

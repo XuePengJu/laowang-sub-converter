@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 const b64 = value => Buffer.from(value).toString('base64')
@@ -26,14 +29,17 @@ async function freePort() {
     return port
 }
 
-function request(port, method, path, body = null) {
+function request(port, method, requestPath, body = null, headers = {}) {
     return new Promise((resolve, reject) => {
         const req = http.request({
             hostname: '127.0.0.1',
             port,
             method,
-            path,
-            headers: body ? { 'Content-Type': 'application/json' } : {}
+            path: requestPath,
+            headers: {
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+                ...headers
+            }
         }, res => {
             let data = ''
             res.on('data', chunk => { data += chunk })
@@ -62,6 +68,7 @@ async function waitForBackend(port, timeoutMs = 15000) {
 }
 
 async function main() {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'laowang-api-test-'))
     const onlineA = await createTcpNode()
     const onlineB = await createTcpNode()
     const offlinePort = await freePort()
@@ -87,12 +94,17 @@ async function main() {
     const subContent1 = b64([nodes.ss, nodes.vmess, nodes.anytls].join('\n'))
     const subContent2 = b64([nodes.vmess, nodes.offline].join('\n'))
 
+    let lastEncodedRequest = ''
     const subServer = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
         if (req.url === '/sub1') res.end(subContent1)
         else if (req.url === '/sub2') res.end(subContent2)
         else if (req.url === '/health') res.end(b64([nodes.ss, nodes.offline].join('\n')))
         else if (req.url === '/vless-only') res.end(b64(nodes.vless))
+        else if (req.url.startsWith('/encoded')) {
+            lastEncodedRequest = req.url
+            res.end(subContent1)
+        }
         else res.end('')
     })
     const subPort = await listen(subServer)
@@ -110,7 +122,8 @@ async function main() {
             ...process.env,
             PORT: String(appPort),
             NODE_ENV: 'test',
-            ALLOW_PRIVATE_SUBSCRIPTION_URLS: '1'
+            ALLOW_PRIVATE_SUBSCRIPTION_URLS: '1',
+            DATA_DIR: dataDir
         },
         stdio: ['ignore', 'pipe', 'pipe']
     })
@@ -135,7 +148,32 @@ async function main() {
 
         const targets = await request(appPort, 'GET', '/api/targets')
         assert.equal(targets.status, 200)
-        assert.ok(JSON.parse(targets.body).some(target => target.id === 'singbox' && target.extension === 'json'))
+        const targetList = JSON.parse(targets.body)
+        assert.ok(targetList.some(target =>
+            target.id === 'singbox' &&
+            target.extension === 'json' &&
+            target.nodeTypes.includes('anytls')
+        ))
+
+        for (const target of targetList) {
+            const converted = await request(
+                appPort,
+                'GET',
+                `/api/convert?target=${target.id}&url=${encodeURIComponent(sub1)}&emoji=0`
+            )
+            assert.equal(converted.status, 200, `${target.id}: ${converted.body}`)
+            assert.match(converted.headers['content-type'], new RegExp(target.contentType.split(';')[0]))
+            assert.ok(converted.body.trim(), `${target.id} should return output`)
+        }
+
+        const encodedSource = `http://127.0.0.1:${subPort}/encoded?token=a%26b`
+        const encodedConversion = await request(
+            appPort,
+            'GET',
+            `/api/convert?target=clashmeta&url=${encodeURIComponent(encodedSource)}&emoji=0`
+        )
+        assert.equal(encodedConversion.status, 200, encodedConversion.body)
+        assert.equal(lastEncodedRequest, '/encoded?token=a%26b', 'subscription URL must not be decoded twice')
 
         const mergePreview = await request(appPort, 'POST', '/api/merge/preview', { urls: [sub1, sub2], dedupe: false })
         assert.equal(mergePreview.status, 200, mergePreview.body)
@@ -164,14 +202,60 @@ async function main() {
         assert.match(healthJson.exportConfig, /Mock-SS/)
         assert.doesNotMatch(healthJson.exportConfig, /Mock-Offline/)
 
+        const initialLinks = await request(appPort, 'GET', '/api/shortlink/list')
+        assert.equal(initialLinks.status, 200, initialLinks.body)
+        assert.deepEqual(JSON.parse(initialLinks.body).links, [])
+
+        const createdLink = await request(appPort, 'POST', '/api/shortlink', {
+            url: clashUrl(appPort, sub1),
+            code: 'test-profile'
+        }, {
+            Host: 'sub.example.com',
+            'X-Forwarded-Proto': 'https'
+        })
+        assert.equal(createdLink.status, 201, createdLink.body)
+        const createdJson = JSON.parse(createdLink.body)
+        assert.equal(createdJson.shortUrl, 'https://sub.example.com/s/test-profile')
+
+        const listedLinks = await request(appPort, 'GET', '/api/shortlink/list', null, {
+            Host: 'sub.example.com',
+            'X-Forwarded-Proto': 'https'
+        })
+        assert.equal(JSON.parse(listedLinks.body).links.length, 1)
+
+        const redirect = await request(appPort, 'GET', '/s/test-profile')
+        assert.equal(redirect.status, 302)
+        assert.equal(redirect.headers.location, clashUrl(appPort, sub1))
+
+        const stats = await request(appPort, 'GET', '/api/shortlink/test-profile/stats')
+        assert.equal(JSON.parse(stats.body).clicks, 1)
+
+        const removed = await request(appPort, 'DELETE', '/api/shortlink/test-profile')
+        assert.equal(removed.status, 200, removed.body)
+        assert.ok(fs.existsSync(path.join(dataDir, 'shortlinks.json')))
+
+        const invalidShortLink = await request(appPort, 'POST', '/api/shortlink', {
+            url: 'javascript:alert(1)'
+        })
+        assert.equal(invalidShortLink.status, 400)
+
+        const missingApi = await request(appPort, 'GET', '/api/not-a-route')
+        assert.equal(missingApi.status, 404)
+        assert.match(missingApi.headers['content-type'], /application\/json/)
+
         console.log('api tests passed')
     } finally {
         appProcess.kill()
         subServer.close()
         onlineA.server.close()
         onlineB.server.close()
+        fs.rmSync(dataDir, { recursive: true, force: true })
         if (stderr) process.stderr.write(stderr)
     }
+}
+
+function clashUrl(appPort, subscriptionUrl) {
+    return `http://127.0.0.1:${appPort}/api/convert?target=clashmeta&url=${encodeURIComponent(subscriptionUrl)}`
 }
 
 main().catch(error => {

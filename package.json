@@ -9,9 +9,10 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "start": "npm run build && npm run server",
-    "test": "npm run test:protocol && npm run test:api",
+    "test": "npm run test:protocol && npm run test:api && npm run test:deploy",
     "test:protocol": "node tests/protocol-matrix.test.mjs",
     "test:api": "node tests/api.test.mjs",
+    "test:deploy": "node tests/deployment.test.mjs",
     "audit": "npm audit --audit-level=moderate",
     "docker:build": "docker build -t laowang-sub-converter:latest .",
     "docker:run": "docker run --rm -p 3000:3000 laowang-sub-converter:latest",
@@ -33,17 +34,17 @@
     "url": "https://github.com/tony-wang1990/laowang-sub-converter"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "js-yaml": "^4.1.1"
+    "cors": "^2.8.6",
+    "express": "^4.22.2",
+    "js-yaml": "^4.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.7",
     "lucide-vue-next": "^0.468.0",
     "qrcode": "^1.5.3",
     "vite": "^8.0.16",
-    "vue": "^3.4.0",
-    "vue-router": "^4.2.5"
+    "vue": "^3.5.38",
+    "vue-router": "^4.6.4"
   },
   "overrides": {
     "qs": "^6.15.2"

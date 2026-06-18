@@ -27,8 +27,8 @@
           </label>
 
           <label class="field">
-            <span>规则模板</span>
-            <select class="select" v-model="options.rulePreset">
+            <span>规则模板{{ supportsRulePreset ? '' : '（仅 YAML 客户端）' }}</span>
+            <select class="select" v-model="options.rulePreset" :disabled="!supportsRulePreset">
               <option value="">基础兼容规则</option>
               <option value="standard">标准日常分流</option>
               <option value="developer">开发工具分流</option>
@@ -127,6 +127,7 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { Download, Eye, GitMerge } from 'lucide-vue-next'
+import { TARGET_DEFINITIONS, getTargetDefinition } from '../../shared/targets.js'
 
 const urlsContent = ref('')
 const target = ref('clashmeta')
@@ -145,31 +146,16 @@ const options = reactive({
   rulePreset: 'standard'
 })
 
-const targets = [
-  { id: 'clash', name: 'Clash YAML' },
-  { id: 'clashmeta', name: 'Clash Meta YAML' },
-  { id: 'mihomo', name: 'Mihomo YAML' },
-  { id: 'stash', name: 'Stash YAML' },
-  { id: 'singbox', name: 'sing-box JSON' },
-  { id: 'hiddify', name: 'Hiddify JSON' },
-  { id: 'nekobox', name: 'NekoBox JSON' },
-  { id: 'sfa', name: 'SFA JSON' },
-  { id: 'sfi', name: 'SFI JSON' },
-  { id: 'sfm', name: 'SFM JSON' },
-  { id: 'surge', name: 'Surge CONF' },
-  { id: 'surfboard', name: 'Surfboard CONF' },
-  { id: 'quantumultx', name: 'Quantumult X' },
-  { id: 'loon', name: 'Loon CONF' },
-  { id: 'shadowrocket', name: 'Shadowrocket' },
-  { id: 'v2rayn', name: 'V2RayN' },
-  { id: 'v2rayng', name: 'V2RayNG' },
-  { id: 'v2rayu', name: 'V2RayU' }
-]
+const targets = TARGET_DEFINITIONS.map(client => ({
+  id: client.id,
+  name: `${client.name} ${client.extension.toUpperCase()}`
+}))
 
 const urls = computed(() => urlsContent.value
   .split('\n')
   .map(url => url.trim())
   .filter(url => /^https?:\/\//i.test(url)))
+const supportsRulePreset = computed(() => getTargetDefinition(target.value)?.format === 'yaml')
 
 const previewMerge = async () => {
   loading.value = true
@@ -197,7 +183,12 @@ const downloadMerge = async () => {
     const response = await fetch('/api/merge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls: urls.value, target: target.value, ...options })
+      body: JSON.stringify({
+        urls: urls.value,
+        target: target.value,
+        ...options,
+        rulePreset: supportsRulePreset.value ? options.rulePreset : ''
+      })
     })
     if (!response.ok) {
       const text = await response.text()
@@ -218,10 +209,7 @@ const downloadMerge = async () => {
 }
 
 const extensionFor = (client) => {
-  if (['singbox', 'sing-box', 'nekobox', 'hiddify', 'sfa', 'sfi', 'sfm'].includes(client)) return 'json'
-  if (['clash', 'clashmeta', 'mihomo', 'stash', 'clashverge', 'clash-verge', 'clashnyanpasu', 'clash-nyanpasu', 'flclash'].includes(client)) return 'yaml'
-  if (['surge', 'loon', 'surfboard'].includes(client)) return 'conf'
-  return 'txt'
+  return getTargetDefinition(client)?.extension || 'txt'
 }
 </script>
 

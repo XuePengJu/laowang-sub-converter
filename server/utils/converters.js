@@ -1,27 +1,36 @@
 import yaml from 'js-yaml'
 import { applyRulePreset } from './rules.js'
 import { base64 } from './parsers.js'
-import { BASE64_TARGETS, SING_BOX_TARGETS, YAML_TARGETS, normalizeTarget } from './targets.js'
+import {
+    BASE64_TARGETS,
+    SING_BOX_TARGETS,
+    YAML_TARGETS,
+    normalizeTarget,
+    supportedNodeTypesForTarget
+} from './targets.js'
 
 export function convertToTarget(nodes, target, options = {}) {
     const normalized = normalizeTarget(target)
+    const compatibleNodes = prepareNodes(nodes, normalized)
+    if (!compatibleNodes.length) return ''
     const safeOptions = {
         udp: options.udp !== false,
         skipCert: options.skipCert === true,
         rulePreset: options.rulePreset || ''
     }
 
-    if (YAML_TARGETS.has(normalized)) return convertToClash(nodes, safeOptions, normalized)
-    if (normalized === 'surge' || normalized === 'surfboard') return convertToSurge(nodes, safeOptions)
-    if (normalized === 'quantumultx') return convertToQuantumultX(nodes, safeOptions)
-    if (normalized === 'loon') return convertToLoon(nodes, safeOptions)
-    if (BASE64_TARGETS.has(normalized)) return convertToBase64(nodes)
-    if (SING_BOX_TARGETS.has(normalized)) return convertToSingBox(nodes, safeOptions)
+    if (YAML_TARGETS.has(normalized)) return convertToClash(compatibleNodes, safeOptions, normalized)
+    if (normalized === 'surge' || normalized === 'surfboard') return convertToSurge(compatibleNodes, safeOptions, normalized)
+    if (normalized === 'quantumultx') return convertToQuantumultX(compatibleNodes, safeOptions)
+    if (normalized === 'loon') return convertToLoon(compatibleNodes, safeOptions)
+    if (BASE64_TARGETS.has(normalized)) return convertToBase64(compatibleNodes)
+    if (SING_BOX_TARGETS.has(normalized)) return convertToSingBox(compatibleNodes, safeOptions)
     return ''
 }
 
 function convertToClash(nodes, options, target) {
     const proxies = nodes.map(node => toClashProxy(node, options, target)).filter(Boolean)
+    if (!proxies.length) return ''
     const names = proxies.map(proxy => proxy.name)
     const { proxyGroups, rules } = options.rulePreset
         ? applyRulePreset(names, options.rulePreset)
@@ -56,7 +65,14 @@ function toClashProxy(node, options, target) {
 
     switch (node.type) {
         case 'ss':
-            return { ...base, type: 'ss', cipher: node.method, password: node.password }
+            return dropUndefined({
+                ...base,
+                type: 'ss',
+                cipher: node.method,
+                password: node.password,
+                plugin: clashPluginName(node.plugin),
+                'plugin-opts': normalizePluginOptions(node.pluginOpts)
+            })
         case 'ssr':
             return {
                 ...base,
@@ -108,42 +124,52 @@ function toClashProxy(node, options, target) {
             }, node)
         case 'hysteria':
             if (!extended) return null
-            return {
+            return dropUndefined({
                 ...base,
                 type: 'hysteria',
-                auth_str: node.auth,
-                up: node.up,
-                down: node.down,
+                ...(target === 'stash'
+                    ? {
+                        'auth-str': node.auth,
+                        'up-speed': node.up,
+                        'down-speed': node.down
+                    }
+                    : {
+                        auth_str: node.auth,
+                        up: node.up,
+                        down: node.down
+                    }),
                 alpn: [node.alpn || 'h3'],
                 obfs: node.obfs || undefined,
                 sni: node.sni || undefined,
                 'skip-cert-verify': node.insecure || options.skipCert
-            }
+            })
         case 'hysteria2':
             if (!extended) return null
-            return {
+            return dropUndefined({
                 ...base,
                 type: 'hysteria2',
-                password: node.password,
+                ...(target === 'stash' ? { auth: node.password } : { password: node.password }),
                 sni: node.sni || undefined,
                 obfs: node.obfs || undefined,
                 'obfs-password': node.obfs ? node.obfsPassword || '' : undefined,
                 'skip-cert-verify': node.insecure || options.skipCert
-            }
+            })
         case 'tuic':
             if (!extended) return null
-            return {
+            return dropUndefined({
                 ...base,
                 type: 'tuic',
-                uuid: node.uuid,
-                password: node.password,
+                version: target === 'stash' ? (node.token && !node.password ? 4 : 5) : undefined,
+                uuid: node.password ? node.uuid : undefined,
+                password: node.password || undefined,
+                token: node.token && !node.password ? node.token : undefined,
                 alpn: node.alpn || ['h3'],
                 'congestion-controller': node.congestion || 'bbr',
                 sni: node.sni || undefined,
                 'skip-cert-verify': node.insecure || options.skipCert,
                 'udp-relay-mode': node.udpRelayMode || 'native',
                 'reduce-rtt': true
-            }
+            })
         case 'anytls':
             if (!extended) return null
             return dropUndefined({
@@ -208,72 +234,78 @@ function withTransport(proxy, node) {
     return dropUndefined(proxy)
 }
 
-function convertToSurge(nodes, options) {
+function convertToSurge(nodes, options, target) {
     const proxies = nodes
-        .map(node => ({ node, line: toSurgeLine(node, options) }))
+        .map(node => ({ node, line: toSurgeLine(node, options, target) }))
         .filter(item => item.line)
     const lines = ['[Proxy]']
     for (const proxy of proxies) lines.push(proxy.line)
     if (!proxies.length) return ''
 
-    lines.push('', '[Proxy Group]', `PROXY = select, ${proxies.map(item => item.node.name).join(', ')}`)
+    lines.push('', '[Proxy Group]', `PROXY = select, ${proxies.map(item => inlineName(item.node.name)).join(', ')}`)
     lines.push('', '[Rule]', 'GEOIP,CN,DIRECT', 'FINAL,PROXY')
     return lines.join('\n')
 }
 
-function toSurgeLine(node, options) {
+function toSurgeLine(node, options, target) {
+    const name = inlineName(node.name)
+    const server = formatHost(node.server)
     switch (node.type) {
         case 'ss':
-            return `${node.name} = ss, ${node.server}, ${node.port}, encrypt-method=${node.method}, password=${node.password}, udp-relay=${options.udp}`
+            return appendParts(`${name} = ss, ${server}, ${node.port}, encrypt-method=${node.method}, password=${confValue(node.password)}`, [
+                `udp-relay=${options.udp}`,
+                shadowsocksObfs(node.plugin, node.pluginOpts, 'mode'),
+                shadowsocksObfs(node.plugin, node.pluginOpts, 'host')
+            ])
         case 'vmess':
-            return appendParts(`${node.name} = vmess, ${node.server}, ${node.port}, username=${node.uuid}`, [
+            return appendParts(`${name} = vmess, ${server}, ${node.port}, username=${confValue(node.uuid)}`, [
                 'vmess-aead=true',
                 node.tls && 'tls=true',
-                node.sni && `sni=${node.sni}`,
+                node.sni && `sni=${confValue(node.sni)}`,
                 node.ws && 'ws=true',
-                node.ws?.path && `ws-path=${node.ws.path}`,
-                node.ws?.headers?.Host && `ws-headers=Host:${node.ws.headers.Host}`,
+                node.ws?.path && `ws-path=${confValue(node.ws.path)}`,
+                node.ws?.headers?.Host && `ws-headers=Host:${confValue(node.ws.headers.Host)}`,
                 options.skipCert && 'skip-cert-verify=true'
             ])
         case 'trojan':
-            return appendParts(`${node.name} = trojan, ${node.server}, ${node.port}, password=${node.password}`, [
-                node.sni && `sni=${node.sni}`,
+            return appendParts(`${name} = trojan, ${server}, ${node.port}, password=${confValue(node.password)}`, [
+                node.sni && `sni=${confValue(node.sni)}`,
                 options.skipCert && 'skip-cert-verify=true'
             ])
         case 'hysteria2':
-            return appendParts(`${node.name} = hysteria2, ${node.server}, ${node.port}, password=${node.password}`, [
-                node.sni && `sni=${node.sni}`,
+            return appendParts(`${name} = hysteria2, ${server}, ${node.port}, password=${confValue(node.password)}`, [
+                node.sni && `sni=${confValue(node.sni)}`,
+                node.obfsPassword && `salamander-password=${confValue(node.obfsPassword)}`,
                 (node.insecure || options.skipCert) && 'skip-cert-verify=true'
             ])
         case 'snell':
-            return appendParts(`${node.name} = snell, ${node.server}, ${node.port}, psk=${node.psk}, version=${node.version || 3}`, [
+            return appendParts(`${name} = snell, ${server}, ${node.port}, psk=${confValue(node.psk)}, version=${node.version || 3}`, [
                 node.obfs && `obfs=${node.obfs}`,
-                node.obfsHost && `obfs-host=${node.obfsHost}`
+                node.obfsHost && `obfs-host=${confValue(node.obfsHost)}`,
+                `udp-relay=${options.udp}`
             ])
         case 'tuic':
-            return appendParts(`${node.name} = tuic, ${node.server}, ${node.port}, token=${node.token || node.password}`, [
+            return appendParts(`${name} = tuic, ${server}, ${node.port}, token=${confValue(node.token || node.password)}`, [
                 node.alpn?.length && `alpn=${node.alpn[0]}`,
-                node.sni && `sni=${node.sni}`,
+                node.sni && `sni=${confValue(node.sni)}`,
                 (node.insecure || options.skipCert) && 'skip-cert-verify=true',
                 options.udp && 'udp-relay=true'
             ])
         case 'anytls':
-            return appendParts(`${node.name} = anytls, ${node.server}, ${node.port}, password=${node.password}`, [
-                node.sni && `sni=${node.sni}`,
+            return appendParts(`${name} = anytls, ${server}, ${node.port}, password=${confValue(node.password)}`, [
+                node.sni && `sni=${confValue(node.sni)}`,
                 (node.insecure || options.skipCert) && 'skip-cert-verify=true'
             ])
         case 'http':
-            return appendParts(`${node.name} = http, ${node.server}, ${node.port}`, [
-                node.username && `username=${node.username}`,
-                node.password && `password=${node.password}`,
-                node.tls && 'tls=true',
-                node.sni && `sni=${node.sni}`,
+            return appendParts(`${name} = ${node.tls ? 'https' : 'http'}, ${server}, ${node.port}${positionalAuth(node)}`, [
+                node.sni && `sni=${confValue(node.sni)}`,
                 (node.tls && options.skipCert) && 'skip-cert-verify=true'
             ])
         case 'socks5':
-            return appendParts(`${node.name} = socks5, ${node.server}, ${node.port}`, [
-                node.username && `username=${node.username}`,
-                node.password && `password=${node.password}`
+            return appendParts(`${name} = ${node.tls ? 'socks5-tls' : 'socks5'}, ${server}, ${node.port}${positionalAuth(node)}`, [
+                `udp-relay=${options.udp}`,
+                node.tls && node.sni && `sni=${confValue(node.sni)}`,
+                (node.tls && options.skipCert) && 'skip-cert-verify=true'
             ])
         default:
             return ''
@@ -282,11 +314,13 @@ function toSurgeLine(node, options) {
 
 function convertToQuantumultX(nodes, options) {
     return nodes.map(node => {
+        const name = inlineName(node.name)
+        const server = formatHost(node.server)
         switch (node.type) {
             case 'ss':
-                return `shadowsocks=${node.server}:${node.port}, method=${node.method}, password=${node.password}, udp-relay=${options.udp}, tag=${node.name}`
+                return `shadowsocks=${server}:${node.port}, method=${node.method}, password=${confValue(node.password)}, udp-relay=${options.udp}, tag=${name}`
             case 'vmess':
-                return appendParts(`vmess=${node.server}:${node.port}, method=${node.cipher || 'auto'}, password=${node.uuid}, tag=${node.name}`, [
+                return appendParts(`vmess=${server}:${node.port}, method=${node.cipher || 'auto'}, password=${confValue(node.uuid)}, tag=${name}`, [
                     node.tls && 'tls=1',
                     node.sni && `tls-host=${node.sni}`,
                     node.ws && 'obfs=ws',
@@ -295,7 +329,7 @@ function convertToQuantumultX(nodes, options) {
                     options.skipCert && 'tls-verification=false'
                 ])
             case 'vless':
-                return appendParts(`vless=${node.server}:${node.port}, method=none, password=${node.uuid}, tag=${node.name}`, [
+                return appendParts(`vless=${server}:${node.port}, method=none, password=${confValue(node.uuid)}, tag=${name}`, [
                     node.ws ? (node.tls ? 'obfs=wss' : 'obfs=ws') : (node.tls && 'obfs=over-tls'),
                     node.sni && `tls-host=${node.sni}`,
                     node.flow && `vless-flow=${node.flow}`,
@@ -307,29 +341,29 @@ function convertToQuantumultX(nodes, options) {
                     options.skipCert && 'tls-verification=false'
                 ])
             case 'trojan':
-                return appendParts(`trojan=${node.server}:${node.port}, password=${node.password}, tag=${node.name}`, [
+                return appendParts(`trojan=${server}:${node.port}, password=${confValue(node.password)}, tag=${name}`, [
                     node.sni && `tls-host=${node.sni}`,
                     options.skipCert && 'tls-verification=false'
                 ])
             case 'anytls':
-                return appendParts(`anytls=${node.server}:${node.port}, password=${node.password}, tag=${node.name}`, [
+                return appendParts(`anytls=${server}:${node.port}, password=${confValue(node.password)}, tag=${name}`, [
                     'over-tls=true',
                     node.sni && `tls-host=${node.sni}`,
                     `udp-relay=${options.udp}`,
                     (node.insecure || options.skipCert) && 'tls-verification=false'
                 ])
             case 'http':
-                return appendParts(`http=${node.server}:${node.port}, tag=${node.name}`, [
-                    node.username && `username=${node.username}`,
-                    node.password && `password=${node.password}`,
+                return appendParts(`http=${server}:${node.port}, tag=${name}`, [
+                    node.username && `username=${confValue(node.username)}`,
+                    node.password && `password=${confValue(node.password)}`,
                     node.tls && 'over-tls=true',
                     node.sni && `tls-host=${node.sni}`,
                     (node.tls && options.skipCert) && 'tls-verification=false'
                 ])
             case 'socks5':
-                return appendParts(`socks5=${node.server}:${node.port}, tag=${node.name}`, [
-                    node.username && `username=${node.username}`,
-                    node.password && `password=${node.password}`
+                return appendParts(`socks5=${server}:${node.port}, tag=${name}`, [
+                    node.username && `username=${confValue(node.username)}`,
+                    node.password && `password=${confValue(node.password)}`
                 ])
             default:
                 return ''
@@ -339,13 +373,15 @@ function convertToQuantumultX(nodes, options) {
 
 function convertToLoon(nodes, options) {
     return nodes.map(node => {
+        const name = inlineName(node.name)
+        const server = formatHost(node.server)
         switch (node.type) {
             case 'ss':
-                return appendParts(`${node.name} = Shadowsocks,${node.server},${node.port},${node.method},"${node.password}"`, [
+                return appendParts(`${name} = Shadowsocks,${server},${node.port},${node.method},${quotedValue(node.password)}`, [
                     `udp=${options.udp}`
                 ])
             case 'ssr':
-                return appendParts(`${node.name} = ShadowsocksR,${node.server},${node.port},${node.method},"${node.password}"`, [
+                return appendParts(`${name} = ShadowsocksR,${server},${node.port},${node.method},${quotedValue(node.password)}`, [
                     node.protocol && `protocol=${node.protocol}`,
                     node.protocolParam && `protocol-param=${node.protocolParam}`,
                     node.obfs && `obfs=${node.obfs}`,
@@ -353,7 +389,7 @@ function convertToLoon(nodes, options) {
                     `udp=${options.udp}`
                 ])
             case 'vmess':
-                return appendParts(`${node.name} = vmess,${node.server},${node.port},auto,"${node.uuid}"`, [
+                return appendParts(`${name} = vmess,${server},${node.port},auto,${quotedValue(node.uuid)}`, [
                     node.ws && 'transport=ws',
                     node.ws?.path && `path=${node.ws.path}`,
                     node.ws?.headers?.Host && `host=${node.ws.headers.Host}`,
@@ -362,7 +398,7 @@ function convertToLoon(nodes, options) {
                     options.skipCert && 'skip-cert-verify=true'
                 ])
             case 'vless':
-                return appendParts(`${node.name} = VLESS,${node.server},${node.port},"${node.uuid}"`, [
+                return appendParts(`${name} = VLESS,${server},${node.port},${quotedValue(node.uuid)}`, [
                     node.ws && 'transport=ws',
                     node.ws?.path && `path=${node.ws.path}`,
                     node.ws?.headers?.Host && `host=${node.ws.headers.Host}`,
@@ -377,34 +413,34 @@ function convertToLoon(nodes, options) {
                     options.skipCert && 'skip-cert-verify=true'
                 ])
             case 'trojan':
-                return appendParts(`${node.name} = trojan,${node.server},${node.port},"${node.password}"`, [
+                return appendParts(`${name} = trojan,${server},${node.port},${quotedValue(node.password)}`, [
                     node.sni && `sni=${node.sni}`,
                     options.skipCert && 'skip-cert-verify=true'
                 ])
             case 'hysteria2':
-                return appendParts(`${node.name} = Hysteria2,${node.server},${node.port},"${node.password}"`, [
+                return appendParts(`${name} = Hysteria2,${server},${node.port},${quotedValue(node.password)}`, [
                     node.sni && `sni=${node.sni}`,
                     node.obfsPassword && `salamander-password=${node.obfsPassword}`,
                     `udp=${options.udp}`,
                     (node.insecure || options.skipCert) && 'skip-cert-verify=true'
                 ])
             case 'anytls':
-                return appendParts(`${node.name} = AnyTLS,${node.server},${node.port},"${node.password}"`, [
+                return appendParts(`${name} = AnyTLS,${server},${node.port},${quotedValue(node.password)}`, [
                     node.sni && `sni=${node.sni}`,
                     `udp=${options.udp}`,
                     (node.insecure || options.skipCert) && 'skip-cert-verify=true'
                 ])
             case 'http':
-                return appendParts(`${node.name} = http,${node.server},${node.port}`, [
-                    node.username && `username=${node.username}`,
-                    node.password && `password=${node.password}`,
+                return appendParts(`${name} = http,${server},${node.port}`, [
+                    node.username && `username=${confValue(node.username)}`,
+                    node.password && `password=${confValue(node.password)}`,
                     node.tls && 'over-tls=true',
                     node.sni && `sni=${node.sni}`
                 ])
             case 'socks5':
-                return appendParts(`${node.name} = socks5,${node.server},${node.port}`, [
-                    node.username && `username=${node.username}`,
-                    node.password && `password=${node.password}`
+                return appendParts(`${name} = socks5,${server},${node.port}`, [
+                    node.username && `username=${confValue(node.username)}`,
+                    node.password && `password=${confValue(node.password)}`
                 ])
             default:
                 return ''
@@ -418,11 +454,15 @@ function convertToBase64(nodes) {
 }
 
 function toShareLink(node) {
+    const host = formatHost(node.server)
     switch (node.type) {
-        case 'ss':
-            return `ss://${base64.encode(`${node.method}:${node.password}`)}@${node.server}:${node.port}#${encodeURIComponent(node.name)}`
+        case 'ss': {
+            const plugin = serializePlugin(node.plugin, node.pluginOpts)
+            const query = plugin ? `/?plugin=${encodeURIComponent(plugin)}` : ''
+            return `ss://${base64.encode(`${node.method}:${node.password}`)}@${host}:${node.port}${query}#${encodeURIComponent(node.name)}`
+        }
         case 'ssr': {
-            const main = `${node.server}:${node.port}:${node.protocol}:${node.method}:${node.obfs}:${base64.encodeUrl(node.password)}`
+            const main = `${host}:${node.port}:${node.protocol}:${node.method}:${node.obfs}:${base64.encodeUrl(node.password)}`
             const params = new URLSearchParams()
             if (node.protocolParam) params.set('protoparam', base64.encodeUrl(node.protocolParam))
             if (node.obfsParam) params.set('obfsparam', base64.encodeUrl(node.obfsParam))
@@ -460,7 +500,7 @@ function toShareLink(node) {
                 if (node.reality.shortId) params.set('sid', node.reality.shortId)
                 params.set('fp', node.reality.fingerprint || 'chrome')
             }
-            return `vless://${node.uuid}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`
+            return `vless://${encodeURIComponent(node.uuid)}@${host}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`
         }
         case 'trojan': {
             const params = new URLSearchParams()
@@ -469,10 +509,10 @@ function toShareLink(node) {
             if (node.network === 'ws') params.set('type', 'ws')
             if (node.ws?.path) params.set('path', node.ws.path)
             if (node.ws?.headers?.Host) params.set('host', node.ws.headers.Host)
-            return `trojan://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`
+            return `trojan://${encodeURIComponent(node.password)}@${host}:${node.port}?${params.toString()}#${encodeURIComponent(node.name)}`
         }
         case 'hysteria':
-            return `hysteria://${node.server}:${node.port}?${new URLSearchParams({
+            return `hysteria://${host}:${node.port}?${new URLSearchParams({
                 auth: node.auth,
                 upmbps: String(node.up),
                 downmbps: String(node.down),
@@ -482,13 +522,15 @@ function toShareLink(node) {
                 ...(node.insecure ? { insecure: '1' } : {})
             }).toString()}#${encodeURIComponent(node.name)}`
         case 'hysteria2':
-            return `hysteria2://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${new URLSearchParams({
+            return `hysteria2://${encodeURIComponent(node.password)}@${host}:${node.port}?${new URLSearchParams({
                 sni: node.sni || node.server,
                 ...(node.obfs ? { obfs: node.obfs, 'obfs-password': node.obfsPassword || '' } : {}),
                 ...(node.insecure ? { insecure: '1' } : {})
             }).toString()}#${encodeURIComponent(node.name)}`
         case 'tuic':
-            return `tuic://${node.uuid}:${encodeURIComponent(node.password)}@${node.server}:${node.port}?${new URLSearchParams({
+            return `tuic://${node.password
+                ? `${encodeURIComponent(node.uuid)}:${encodeURIComponent(node.password)}`
+                : encodeURIComponent(node.token)}@${host}:${node.port}?${new URLSearchParams({
                 congestion_control: node.congestion || 'bbr',
                 alpn: (node.alpn || ['h3']).join(','),
                 sni: node.sni || node.server,
@@ -496,13 +538,13 @@ function toShareLink(node) {
                 ...(node.insecure ? { allow_insecure: '1' } : {})
             }).toString()}#${encodeURIComponent(node.name)}`
         case 'snell':
-            return `snell://${encodeURIComponent(node.psk)}@${node.server}:${node.port}?${new URLSearchParams({
+            return `snell://${encodeURIComponent(node.psk)}@${host}:${node.port}?${new URLSearchParams({
                 version: String(node.version || 3),
                 ...(node.obfs ? { obfs: node.obfs } : {}),
                 ...(node.obfsHost ? { 'obfs-host': node.obfsHost } : {})
             }).toString()}#${encodeURIComponent(node.name)}`
         case 'anytls':
-            return `anytls://${encodeURIComponent(node.password)}@${node.server}:${node.port}?${new URLSearchParams({
+            return `anytls://${encodeURIComponent(node.password)}@${host}:${node.port}?${new URLSearchParams({
                 sni: node.sni || node.server,
                 ...(node.alpn?.length ? { alpn: node.alpn.join(',') } : {}),
                 ...(node.fingerprint ? { fp: node.fingerprint } : {}),
@@ -512,9 +554,9 @@ function toShareLink(node) {
                 ...(node.minIdleSession !== undefined ? { 'min-idle-session': String(node.minIdleSession) } : {})
             }).toString()}#${encodeURIComponent(node.name)}`
         case 'http':
-            return `${node.tls ? 'https' : 'http'}://${authPrefix(node)}${node.server}:${node.port}#${encodeURIComponent(node.name)}`
+            return `${node.tls ? 'https' : 'http'}://${authPrefix(node)}${host}:${node.port}#${encodeURIComponent(node.name)}`
         case 'socks5':
-            return `socks5://${authPrefix(node)}${node.server}:${node.port}#${encodeURIComponent(node.name)}`
+            return `socks5://${authPrefix(node)}${host}:${node.port}#${encodeURIComponent(node.name)}`
         default:
             return ''
     }
@@ -522,13 +564,20 @@ function toShareLink(node) {
 
 function convertToSingBox(nodes, options) {
     const outbounds = nodes.map(node => toSingBoxOutbound(node, options)).filter(Boolean)
+    if (!outbounds.length) return ''
     return JSON.stringify({
         log: { level: 'info' },
         outbounds: [
-            { tag: 'proxy', type: 'selector', outbounds: outbounds.map(o => o.tag) },
+            {
+                tag: 'proxy',
+                type: 'selector',
+                outbounds: outbounds.map(outbound => outbound.tag),
+                default: outbounds[0].tag
+            },
             ...outbounds,
             { tag: 'direct', type: 'direct' }
-        ]
+        ],
+        route: { final: 'proxy' }
     }, null, 2)
 }
 
@@ -536,7 +585,14 @@ function toSingBoxOutbound(node, options) {
     const base = { tag: node.name, server: node.server, server_port: node.port }
     switch (node.type) {
         case 'ss':
-            return { ...base, type: 'shadowsocks', method: node.method, password: node.password }
+            return dropUndefined({
+                ...base,
+                type: 'shadowsocks',
+                method: node.method,
+                password: node.password,
+                plugin: singBoxPluginName(node.plugin),
+                plugin_opts: serializePluginOptions(node.pluginOpts, node.plugin)
+            })
         case 'vmess':
             return withSingBoxTransport({
                 ...base,
@@ -664,6 +720,102 @@ function authPrefix(node) {
     const user = encodeURIComponent(node.username || '')
     const password = node.password ? `:${encodeURIComponent(node.password)}` : ''
     return `${user}${password}@`
+}
+
+function prepareNodes(nodes, target) {
+    const allowedTypes = supportedNodeTypesForTarget(target)
+    const usedNames = new Set(['direct', 'reject', 'proxy'])
+
+    return (Array.isArray(nodes) ? nodes : [])
+        .filter(node => allowedTypes.has(node.type))
+        .filter(node => !(SING_BOX_TARGETS.has(target) && node.type === 'tuic' && !node.password))
+        .map((node, index) => {
+            const baseName = String(node.name || `${String(node.type || 'proxy').toUpperCase()} Node ${index + 1}`)
+                .replace(/[\u0000-\u001f\u007f]/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim() || `Proxy Node ${index + 1}`
+            let name = baseName
+            let suffix = 2
+            while (usedNames.has(name.toLocaleLowerCase())) {
+                name = `${baseName} #${suffix++}`
+            }
+            usedNames.add(name.toLocaleLowerCase())
+            return { ...node, name }
+        })
+}
+
+function inlineName(value) {
+    return String(value || 'Proxy')
+        .replace(/[\r\n,=]/g, '_')
+        .trim() || 'Proxy'
+}
+
+function formatHost(value) {
+    const host = String(value || '').replace(/^\[|\]$/g, '')
+    return host.includes(':') ? `[${host}]` : host
+}
+
+function confValue(value) {
+    const text = String(value ?? '')
+    return /[\s,",]/.test(text) ? quotedValue(text) : text
+}
+
+function quotedValue(value) {
+    return JSON.stringify(String(value ?? ''))
+}
+
+function positionalAuth(node) {
+    if (!node.username && !node.password) return ''
+    return `, ${confValue(node.username || '')}, ${confValue(node.password || '')}`
+}
+
+function normalizePluginOptions(value) {
+    if (!value) return undefined
+    if (typeof value === 'object') return value
+    const entries = String(value)
+        .split(';')
+        .map(part => part.split('=', 2))
+        .filter(([key]) => key)
+    return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+function serializePluginOptions(value, plugin) {
+    if (!value) return ''
+    if (typeof value === 'string') return value
+    return Object.entries(value)
+        .filter(([, item]) => item !== false && item !== undefined && item !== null && item !== '')
+        .map(([key, item]) => {
+            const optionKey = ['obfs', 'obfs-local'].includes(plugin)
+                ? (key === 'mode' ? 'obfs' : (key === 'host' ? 'obfs-host' : key))
+                : key
+            return item === true ? optionKey : `${optionKey}=${item}`
+        })
+        .join(';')
+}
+
+function serializePlugin(plugin, options) {
+    if (!plugin) return ''
+    const name = singBoxPluginName(plugin)
+    const serialized = serializePluginOptions(options, plugin)
+    return serialized ? `${name};${serialized}` : name
+}
+
+function clashPluginName(plugin) {
+    if (!plugin) return undefined
+    return plugin === 'obfs-local' ? 'obfs' : plugin
+}
+
+function singBoxPluginName(plugin) {
+    if (!plugin) return undefined
+    return plugin === 'obfs' ? 'obfs-local' : plugin
+}
+
+function shadowsocksObfs(plugin, options, field) {
+    if (!['obfs', 'obfs-local'].includes(plugin)) return ''
+    const values = normalizePluginOptions(options) || {}
+    if (field === 'mode' && values.mode) return `obfs=${values.mode}`
+    if (field === 'host' && values.host) return `obfs-host=${confValue(values.host)}`
+    return ''
 }
 
 function dropUndefined(value) {

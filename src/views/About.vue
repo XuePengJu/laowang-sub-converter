@@ -157,16 +157,17 @@ import {
   ShieldCheck,
   TerminalSquare
 } from 'lucide-vue-next'
+import { TARGET_DEFINITIONS } from '../../shared/targets.js'
 
 const copied = ref('')
 
 const commands = {
-  install: 'curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash',
-  port: 'curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo env PORT=8080 bash',
-  update: 'curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s update',
-  status: 'curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s status',
-  logs: 'curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s logs',
-  uninstall: 'curl -fsSL https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh | sudo bash -s uninstall'
+  install: 'curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash',
+  port: 'curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo env PORT=8080 bash',
+  update: 'curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s update',
+  status: 'curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s status',
+  logs: 'curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s logs',
+  uninstall: 'curl -fsSL "https://raw.githubusercontent.com/tony-wang1990/laowang-sub-converter/main/scripts/deploy.sh?$(date +%s)" | sudo bash -s uninstall'
 }
 
 const commandCards = [
@@ -179,7 +180,7 @@ const commandCards = [
 
 const protocols = ['SS', 'SSR', 'VMess', 'VLESS', 'VLESS Reality', 'Trojan', 'Hysteria', 'Hysteria2', 'TUIC', 'Snell', 'AnyTLS', 'HTTP', 'SOCKS5', 'Clash YAML', 'sing-box JSON']
 
-const clients = ['Clash', 'Clash Meta', 'Mihomo', 'Stash', 'Surge', 'Surfboard', 'Loon', 'Quantumult X', 'Shadowrocket', 'V2RayN', 'V2RayNG', 'V2RayU', 'NekoBox', 'Hiddify', 'sing-box', 'SFA', 'SFI', 'SFM']
+const clients = TARGET_DEFINITIONS.map(client => client.name)
 
 const apis = [
   { method: 'GET', path: '/api/convert', body: '订阅转换，输出目标客户端格式。' },
@@ -188,14 +189,17 @@ const apis = [
   { method: 'POST', path: '/api/health/check', body: '检测节点连通性并导出在线节点。' },
   { method: 'POST', path: '/api/shortlink', body: '创建持久化短链接。' },
   { method: 'GET', path: '/api/shortlink/list', body: '列出短链接和访问次数。' },
+  { method: 'GET', path: '/api/shortlink/:id/stats', body: '读取单个短链接统计。' },
+  { method: 'DELETE', path: '/api/shortlink/:id', body: '删除短链接。' },
   { method: 'GET', path: '/api/targets', body: '返回支持的目标客户端列表。' },
   { method: 'GET', path: '/healthz', body: '服务健康检查。' }
 ]
 
 const checklist = [
   'Docker 镜像包含前端静态资源、后端 API 和短链接持久化目录。',
+  '数据目录固定使用 UID/GID 10001，升级脚本会自动修复旧目录权限。',
   '订阅拉取默认阻止 localhost / 内网地址，降低公开部署 SSRF 风险。',
-  '转换、合并、健康检测和协议矩阵均纳入自动化测试。',
+  '21 个目标客户端、短链接生命周期、合并和节点检测均纳入自动化测试。',
   '生产构建使用 Vite 8，依赖审计当前为 0 漏洞。',
   '一键脚本支持安装、更新、状态、日志和卸载。'
 ]
