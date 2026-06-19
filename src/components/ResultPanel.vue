@@ -72,6 +72,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import QRCode from 'qrcode'
 import { Check, Copy, Download, Loader2, QrCode } from 'lucide-vue-next'
 import { getTargetDefinition, normalizeTargetId } from '../../shared/targets.js'
+import { copyText } from '../utils/clipboard.js'
 
 const props = defineProps({
   result: {
@@ -120,15 +121,6 @@ const copyQrValue = async () => {
   setTimeout(() => {
     qrValueCopied.value = false
   }, 1600)
-}
-
-const copyText = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text)
-  } catch {
-    urlInput.value?.select()
-    document.execCommand('copy')
-  }
 }
 
 const downloadConfig = async () => {
