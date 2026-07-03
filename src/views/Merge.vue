@@ -129,6 +129,7 @@ import { computed, reactive, ref } from 'vue'
 import { Download, Eye, GitMerge } from 'lucide-vue-next'
 import { TARGET_DEFINITIONS, getTargetDefinition } from '../../shared/targets.js'
 import { apiErrorMessage } from '../utils/apiError.js'
+import { downloadBlob } from '../utils/download.js'
 
 const urlsContent = ref('')
 const target = ref('clashmeta')
@@ -196,12 +197,7 @@ const downloadMerge = async () => {
       throw new Error(apiErrorMessage(text, `合并失败（HTTP ${response.status}）`))
     }
     const blob = await response.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = `merged-${target.value}.${extensionFor(target.value)}`
-    a.click()
-    URL.revokeObjectURL(objectUrl)
+    downloadBlob(blob, `merged-${target.value}.${extensionFor(target.value)}`)
   } catch (err) {
     error.value = apiErrorMessage(err, '合并失败')
   } finally {

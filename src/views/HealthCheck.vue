@@ -118,6 +118,7 @@ import { computed, ref } from 'vue'
 import { Activity, Download, HeartPulse, Loader2 } from 'lucide-vue-next'
 import { TARGET_DEFINITIONS } from '../../shared/targets.js'
 import { apiErrorMessage } from '../utils/apiError.js'
+import { downloadBlob } from '../utils/download.js'
 
 const sourceMode = ref('url')
 const sourceInput = ref('')
@@ -153,6 +154,7 @@ const startCheck = async () => {
   error.value = ''
   results.value = []
   exportConfig.value = ''
+  currentFilter.value = 'all'
 
   try {
     const payload = {
@@ -184,12 +186,7 @@ const startCheck = async () => {
 const exportOnlineNodes = () => {
   if (!exportConfig.value) return
   const blob = new Blob([exportConfig.value], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = exportFileName.value
-  a.click()
-  URL.revokeObjectURL(url)
+  downloadBlob(blob, exportFileName.value)
 }
 
 const latencyClass = (latency) => {

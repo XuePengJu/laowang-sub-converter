@@ -73,6 +73,7 @@ import QRCode from 'qrcode'
 import { Check, Copy, Download, Loader2, QrCode } from 'lucide-vue-next'
 import { getTargetDefinition, normalizeTargetId } from '../../shared/targets.js'
 import { copyText } from '../utils/clipboard.js'
+import { downloadBlob } from '../utils/download.js'
 
 const props = defineProps({
   result: {
@@ -134,12 +135,7 @@ const downloadConfig = async () => {
     }
 
     const blob = await response.blob()
-    const objectUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = objectUrl
-    a.download = `${target.value}-config.${extensionFor(target.value)}`
-    a.click()
-    URL.revokeObjectURL(objectUrl)
+    downloadBlob(blob, `${target.value}-config.${extensionFor(target.value)}`)
   } catch (err) {
     error.value = err.message || '下载失败'
   } finally {
